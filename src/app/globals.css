@@ -1,0 +1,13 @@
+@import "tailwindcss";
+@import "./theme.css";
+
+@theme inline {
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: Arial, Helvetica, sans-serif;
+}

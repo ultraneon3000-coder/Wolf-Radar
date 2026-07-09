@@ -1,0 +1,33 @@
+/*
+ * Wolf-Radar — zentrale Theme-Datei.
+ * Einziges dunkles Theme, abgeleitet vom Look von Christian Wolf. Alle Werte
+ * hier ändern, um Look überall anzupassen — nichts davon ist im Code verstreut.
+ */
+
+:root {
+  /* Basis-Palette */
+  --color-canvas: #0f1310; /* Hintergrund */
+  --color-surface: #161b17; /* Flächen/Karten */
+  --color-line: #232a24; /* Trennlinien */
+  --color-accent: #c4f000; /* Marken-Akzent: Logo, aktiver Menüpunkt, Primär-Button */
+  --color-ink: #e8ede8; /* Text primär */
+  --color-muted: #8a928a; /* Text sekundär */
+
+  /* Urteils-Badges — bewusst vom Marken-Grün getrennt, damit ein Urteil nie mit
+     dem Marken-Akzent verwechselt wird. */
+  --color-ok: #4ade80; /* seriös */
+  --color-warn: #f59e0b; /* gemischt */
+  --color-bad: #f87171; /* fragwürdig */
+}
+
+@theme inline {
+  --color-canvas: var(--color-canvas);
+  --color-surface: var(--color-surface);
+  --color-line: var(--color-line);
+  --color-accent: var(--color-accent);
+  --color-ink: var(--color-ink);
+  --color-muted: var(--color-muted);
+  --color-ok: var(--color-ok);
+  --color-warn: var(--color-warn);
+  --color-bad: var(--color-bad);
+}
