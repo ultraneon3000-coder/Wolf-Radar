@@ -1,23 +1,16 @@
-import { Innertube, YTNodes } from "youtubei.js";
-import { ProxyAgent, fetch as undiciFetch } from "undici";
 import { TRANSCRIPT_CONFIG } from "./config";
 
 /** Für dieses Video existiert kein nutzbares Transkript (Untertitel deaktiviert, keins gefunden, …). */
 export class TranscriptUnavailableError extends Error {}
-/** YouTube blockt diese IP gerade (Rate-Limit/Captcha) — kein Fakt über das Video, nur vorübergehend. */
+/** Supadata blockt diese Anfrage gerade (Rate-Limit) — kein Fakt über das Video, nur vorübergehend. */
 export class TranscriptBlockedError extends Error {}
 
-// Transkript-Abruf läuft direkt in Node über youtubei.js (InnerTube-API),
-// vorher per Subprozess über das Python-Paket `youtube-transcript-api`
-// (siehe Git-Historie: scripts/fetch_transcript.py) — das scheiterte auf
-// Vercel mit "spawn python ENOENT", da dort kein Python zur Verfügung steht.
-//
-// YouTube blockt Datacenter-IPs (Vercel etc.) für Transkript-Abrufe generell
-// — deshalb läuft der Abruf über einen Residential-Proxy (TRANSCRIPT_PROXY_URL,
-// Format "http://user:pass@host:port"), sofern gesetzt. Lokal kann YouTube nach
-// vielen Anfragen in kurzer Zeit ebenfalls vorübergehend blocken — deshalb
-// werden Anfragen unten serialisiert mit Mindestabstand
-// (TRANSCRIPT_CONFIG.minRequestIntervalMs).
+// Transkript-Abruf läuft über den gehosteten Dienst Supadata (SUPADATA_API_KEY),
+// nicht mehr direkt über youtubei.js gegen YouTube — YouTube verlangt für
+// Transkripte inzwischen einen PoToken, den Supadata auf seiner Seite löst.
+// Details zum Wechsel weg vom direkten InnerTube-Abruf: Git-Historie dieser Datei.
+
+const SUPADATA_TRANSCRIPT_URL = "https://api.supadata.ai/v1/transcript";
 
 /** Kartentext im UI (video.error) — bewusst kurz und ohne technische Details (siehe cache.ts/ResultCard.tsx). */
 const GEO_BLOCKED_MESSAGE =
@@ -25,38 +18,20 @@ const GEO_BLOCKED_MESSAGE =
 const GENERIC_TRANSCRIPT_ERROR_MESSAGE =
   "Für dieses Video konnte kein Transkript abgerufen werden.";
 const IP_BLOCKED_MESSAGE =
-  "YouTube blockiert diese IP gerade (Rate-Limit) — später erneut versuchen.";
+  "Transkript-Dienst ist gerade ausgelastet (Rate-Limit) — später erneut versuchen.";
 
-// YouTubes Sprachmenü liefert Anzeigenamen (z.B. "German (auto-generated)"),
-// keine ISO-Codes — passend zu TRANSCRIPT_CONFIG.preferredLanguages ("de", "en").
-const LANGUAGE_DISPLAY_NAME_HINTS: Record<string, string[]> = {
-  de: ["german", "deutsch"],
-  en: ["english"],
-};
-
-let clientPromise: Promise<Innertube> | null = null;
-
-function buildProxyFetch(proxyUrl: string) {
-  const dispatcher = new ProxyAgent(proxyUrl);
-  // WICHTIG: Hier bewusst undicis eigenes `fetch` verwenden statt Node's
-  // globalem `fetch` (= Platform.shim.fetch unter Node) — Node bündelt intern
-  // eine eigene undici-Version, deren Dispatcher-Klassen NICHT kompatibel mit
-  // dem separat installierten `undici`-Paket sind, aus dem ProxyAgent stammt
-  // ("InvalidArgumentError: invalid onRequestStart method" bei Mischbetrieb).
-  // `init` (inkl. der von youtubei.js gesetzten Header) wird unverändert durchgereicht.
-  // Die Casts überbrücken undicis eigene Request/Response-Typen, die leicht von
-  // den DOM-Typen abweichen, die FetchFunction (= typeof fetch) erwartet —
-  // strukturell zur Laufzeit aber kompatibel.
-  return (input: RequestInfo | URL, init?: RequestInit) =>
-    undiciFetch(input as never, { ...init, dispatcher } as never) as unknown as Promise<Response>;
+interface SupadataContentSegment {
+  text: string;
 }
 
-function getClient(): Promise<Innertube> {
-  if (!clientPromise) {
-    const proxyUrl = process.env.TRANSCRIPT_PROXY_URL?.trim();
-    clientPromise = Innertube.create(proxyUrl ? { fetch: buildProxyFetch(proxyUrl) } : undefined);
-  }
-  return clientPromise;
+interface SupadataTranscriptResponse {
+  content?: SupadataContentSegment[];
+}
+
+interface SupadataErrorResponse {
+  error: string;
+  message: string;
+  details?: string;
 }
 
 function sleep(ms: number): Promise<void> {
@@ -64,9 +39,8 @@ function sleep(ms: number): Promise<void> {
 }
 
 // Serialisiert alle Transkript-Anfragen app-weit mit Mindestabstand, unabhängig
-// davon, wie viele Worker in der /api/analyze-Route gleichzeitig aufrufen.
-// Reduziert das Risiko, YouTube mit einem Schwung paralleler Anfragen erneut
-// in einen IP-Block zu schicken.
+// davon, wie viele Worker in der /api/analyze-Route gleichzeitig aufrufen —
+// schont das Supadata-Rate-Limit bei vielen Videos in Folge.
 let requestQueue: Promise<unknown> = Promise.resolve();
 
 function throttled<T>(task: () => Promise<T>): Promise<T> {
@@ -81,76 +55,86 @@ function throttled<T>(task: () => Promise<T>): Promise<T> {
   return result;
 }
 
-/** Rohe technische Details NUR ins Server-Log, danach immer eine der drei freundlichen Meldungen werfen. */
-function classifyAndThrow(videoId: string, err: unknown): never {
-  const message = err instanceof Error ? err.message : String(err);
-  const name = err instanceof Error ? err.constructor.name : "UnknownError";
-  console.error(`[transcript] ${videoId}: ${name}: ${message}`);
+/**
+ * Rohe technische Details NUR ins Server-Log, danach immer eine der drei
+ * freundlichen Meldungen werfen. Bekannte Supadata-Fehlercodes (siehe
+ * https://docs.supadata.ai/errors/list) werden zuerst geprüft; der
+ * HTTP-Status dient nur als Fallback, falls Supadata mal ohne bekannten
+ * `error`-Code antwortet. Wichtig: "transcript-unavailable" kommt mit
+ * HTTP 206 zurück, nicht mit einem 4xx/5xx-Status.
+ */
+function classifyAndThrow(
+  videoId: string,
+  status: number,
+  body: SupadataErrorResponse | null,
+  rawText: string
+): never {
+  console.error(
+    `[transcript] ${videoId}: Supadata ${status} ${body?.error ?? "?"}: ${body?.details ?? body?.message ?? rawText}`
+  );
 
-  // Netzwerk-/Proxy-seitige Fehler (Rate-Limit, Captcha-Seite, abgebrochene
-  // Verbindung durch den Residential-Proxy) — vorübergehend, kein Fakt über
-  // das Video, daher separat von "kein Transkript verfügbar".
-  if (/429|too many requests|blocked|captcha|econnreset|econnrefused|etimedout|proxy/i.test(
-    `${name} ${message}`
-  )) {
+  const code = body?.error;
+  if (code === "forbidden" || status === 403) {
+    throw new Error(GEO_BLOCKED_MESSAGE);
+  }
+  if (code === "not-found" || code === "transcript-unavailable" || status === 404 || status === 206) {
+    throw new TranscriptUnavailableError(GENERIC_TRANSCRIPT_ERROR_MESSAGE);
+  }
+  if (code === "limit-exceeded" || status === 429) {
     throw new TranscriptBlockedError(IP_BLOCKED_MESSAGE);
   }
   throw new Error(GENERIC_TRANSCRIPT_ERROR_MESSAGE);
 }
 
 async function fetchTranscript(videoId: string): Promise<string> {
-  const youtube = await getClient();
-
-  const info = await youtube.getInfo(videoId).catch((err) => classifyAndThrow(videoId, err));
-
-  const status = info.playability_status;
-  if (status && status.status !== "OK") {
-    console.error(
-      `[transcript] ${videoId}: playability_status=${status.status} reason="${status.reason}"`
-    );
-    if (/available in your country/i.test(status.reason ?? "")) {
-      throw new Error(GEO_BLOCKED_MESSAGE);
-    }
-    throw new TranscriptUnavailableError(`Video nicht verfuegbar (${videoId})`);
+  const apiKey = process.env.SUPADATA_API_KEY;
+  if (!apiKey) {
+    console.error(`[transcript] ${videoId}: SUPADATA_API_KEY ist nicht gesetzt.`);
+    throw new Error(GENERIC_TRANSCRIPT_ERROR_MESSAGE);
   }
 
-  let transcriptInfo;
+  const url = new URL(SUPADATA_TRANSCRIPT_URL);
+  url.searchParams.set("url", `https://youtu.be/${videoId}`);
+  // Supadata bevorzugt die angegebene Sprache, fällt aber selbst automatisch auf
+  // eine verfügbare Sprache zurück, wenn Deutsch nicht existiert (verifiziert: ein
+  // Video mit nur deutschen Untertiteln liefert bei lang=en trotzdem die deutschen,
+  // Status 200) — ein einzelner Request mit lang=de deckt "bevorzugt Deutsch,
+  // sonst Standard" also bereits ab.
+  url.searchParams.set("lang", TRANSCRIPT_CONFIG.preferredLanguages[0]);
+
+  let res: Response;
   try {
-    transcriptInfo = await info.getTranscript();
-    // Wählt bevorzugt Deutsch, dann Englisch (TRANSCRIPT_CONFIG.preferredLanguages);
-    // findet sich keine der beiden, bleibt YouTubes Standardauswahl bestehen.
-    for (const code of TRANSCRIPT_CONFIG.preferredLanguages) {
-      const hints = LANGUAGE_DISPLAY_NAME_HINTS[code] ?? [];
-      const match = transcriptInfo.languages.find((lang) =>
-        hints.some((hint) => lang.toLowerCase().includes(hint))
-      );
-      if (!match) continue;
-      if (match !== transcriptInfo.selectedLanguage) {
-        transcriptInfo = await transcriptInfo.selectLanguage(match);
-      }
-      break;
-    }
+    res = await fetch(url, { headers: { "x-api-key": apiKey } });
   } catch (err) {
-    console.error(`[transcript] ${videoId}: getTranscript() fehlgeschlagen:`, err);
-    throw new TranscriptUnavailableError(`Kein Transkript gefunden (${videoId})`);
+    console.error(`[transcript] ${videoId}: Netzwerkfehler beim Supadata-Aufruf:`, err);
+    throw new Error(GENERIC_TRANSCRIPT_ERROR_MESSAGE);
   }
 
-  const segments = transcriptInfo.transcript.content?.body?.initial_segments ?? [];
-  const text = segments
-    .filter((s) => s.is(YTNodes.TranscriptSegment))
-    .map((s) => s.snippet.toString().replace(/\n/g, " "))
-    .join(" ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .join(" ");
+  const rawText = await res.text();
+  let data: SupadataTranscriptResponse | SupadataErrorResponse | null = null;
+  try {
+    data = JSON.parse(rawText);
+  } catch {
+    // Antwort war kein JSON — data bleibt null, rawText geht ins Log.
+  }
 
+  // Nicht nur auf res.ok verlassen: "transcript-unavailable" kommt mit HTTP 206
+  // zurück, was fetch als "ok" behandelt.
+  if (data && "error" in data) {
+    classifyAndThrow(videoId, res.status, data, rawText);
+  }
+  if (!res.ok || !data) {
+    classifyAndThrow(videoId, res.status, null, rawText);
+  }
+
+  const text = (data.content ?? []).map((s) => s.text).join(" ").trim();
   if (!text) {
-    throw new TranscriptUnavailableError(`Leeres Transkript (${videoId})`);
+    throw new TranscriptUnavailableError(GENERIC_TRANSCRIPT_ERROR_MESSAGE);
   }
   return text;
 }
 
-/** Holt das Transkript direkt über youtubei.js (InnerTube-API), bevorzugt Deutsch, über TRANSCRIPT_PROXY_URL. */
+/** Holt das Transkript über den gehosteten Dienst Supadata, bevorzugt Deutsch. */
 export async function getTranscriptText(videoId: string): Promise<string> {
   return throttled(() => fetchTranscript(videoId));
 }
