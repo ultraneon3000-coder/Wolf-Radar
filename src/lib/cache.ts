@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { FAILURE_CACHE_TTL_MS } from "./config";
 import { supabase } from "./supabase";
-import type { AnalyzedVideo, Urteil, VideoStatus } from "./types";
+import type { AnalyzedVideo, SavedChannel, Urteil, VideoStatus } from "./types";
 
 // Einfacher Cache für den MVP: In-Memory (schnell, pro Server-Prozess) + eine
 // lokale JSON-Datei als Durchsatz über Neustarts hinweg. Reicht für den
@@ -152,4 +152,24 @@ export function addSeen(video: AnalyzedVideo): void {
 
 export function removeSeen(videoId: string): void {
   seenStore.delete(videoId);
+}
+
+// Von Wolf gespeicherte Kanäle für den "Nur meine Kanäle"-Suchmodus (siehe
+// api/channels/route.ts). Gleicher Persistenz-Mechanismus wie Favoriten/Gesehen.
+const channelsStore = createJsonFileStore<SavedChannel>("kanaele.json");
+
+export function listChannels(): SavedChannel[] {
+  return channelsStore.values();
+}
+
+export function isChannelSaved(channelId: string): boolean {
+  return channelsStore.has(channelId);
+}
+
+export function addChannel(channel: SavedChannel): void {
+  channelsStore.set(channel.channelId, channel);
+}
+
+export function removeChannel(channelId: string): void {
+  channelsStore.delete(channelId);
 }

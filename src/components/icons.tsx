@@ -80,6 +80,23 @@ export function ListIcon({ className }: IconProps) {
   );
 }
 
+export function ChannelIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className} aria-hidden="true">
+      <rect x="2.5" y="5.5" width="19" height="13" rx="2.5" />
+      <path d="M10.5 9.5l4.5 2.5-4.5 2.5z" />
+    </svg>
+  );
+}
+
+export function TrashIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className} aria-hidden="true">
+      <path d="M4 7h16M9.5 7V5a1.5 1.5 0 0 1 1.5-1.5h2A1.5 1.5 0 0 1 14.5 5v2M6.5 7l.8 12a2 2 0 0 0 2 1.9h5.4a2 2 0 0 0 2-1.9l.8-12" />
+    </svg>
+  );
+}
+
 export function SettingsIcon({ className }: IconProps) {
   return (
     <svg {...base} className={className} aria-hidden="true">

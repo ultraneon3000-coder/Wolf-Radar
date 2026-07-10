@@ -35,6 +35,14 @@ export interface VideoMeta {
 // diese Einschränkung (siehe lib/youtube.ts searchVideoIds).
 export type RegionMode = "de" | "international";
 
+// Von Wolf gespeicherter YouTube-Kanal (siehe lib/channels-context.tsx,
+// api/channels/route.ts) — für den "Nur meine Kanäle"-Suchmodus.
+export interface SavedChannel {
+  channelId: string;
+  title: string;
+  thumbnail: string;
+}
+
 export type VideoStatus = "ok" | "kein_transkript" | "fehler";
 
 export interface AnalyzedVideo extends VideoMeta {

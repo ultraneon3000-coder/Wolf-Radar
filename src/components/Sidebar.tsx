@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import type { ComponentType } from "react";
 import {
+  ChannelIcon,
   EyeIcon,
   ListIcon,
   RadarIcon,
@@ -26,6 +27,7 @@ const NAV_ITEMS: NavItem[] = [
   { href: "/suche", label: "Suche", icon: SearchIcon },
   { href: "/favoriten", label: "Favoriten", icon: StarIcon },
   { href: "/gesehen", label: "Schon gesehen", icon: EyeIcon },
+  { href: "/kanaele", label: "Meine Kanäle", icon: ChannelIcon },
   { href: "/playlists", label: "Playlists", icon: ListIcon, disabled: true, badge: "bald" },
   { href: "/einstellungen", label: "Einstellungen", icon: SettingsIcon },
 ];

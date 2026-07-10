@@ -1,6 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import { AppShell } from "@/components/AppShell";
+import { ChannelsProvider } from "@/lib/channels-context";
 import { FavoritesProvider } from "@/lib/favorites-context";
 import { SeenProvider } from "@/lib/seen-context";
 import { DEMO_MODE } from "@/lib/demo";
@@ -35,7 +36,9 @@ export default function RootLayout({
       <body className="min-h-full">
         <FavoritesProvider>
           <SeenProvider>
-            <AppShell demoMode={DEMO_MODE}>{children}</AppShell>
+            <ChannelsProvider>
+              <AppShell demoMode={DEMO_MODE}>{children}</AppShell>
+            </ChannelsProvider>
           </SeenProvider>
         </FavoritesProvider>
       </body>

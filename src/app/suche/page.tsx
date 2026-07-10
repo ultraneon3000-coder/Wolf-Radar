@@ -36,9 +36,14 @@ function buildSearchUrl(
   query: string,
   region: RegionMode,
   filters: Pick<FilterState, "sort" | "period">,
+  channelsOnly: boolean,
   pageToken?: string
 ): string {
-  const params = new URLSearchParams({ q: query, region });
+  const params = new URLSearchParams({ region });
+  // Im "Nur meine Kanäle"-Modus ist ein leerer Suchbegriff erlaubt (siehe
+  // SearchBar) — dann darf q gar nicht erst gesetzt werden.
+  if (query) params.set("q", query);
+  if (channelsOnly) params.set("channelsOnly", "true");
   if (filters.sort === "date_desc") params.set("order", "date");
   const publishedAfter = periodToPublishedAfter(filters.period);
   if (publishedAfter) params.set("publishedAfter", publishedAfter);
@@ -59,6 +64,11 @@ export default function SuchePage() {
   // Steuert regionCode=DE + relevanceLanguage=de bei der YouTube-Suche (siehe
   // api/analyze/route.ts) — gilt für die normale Suche UND "Mehr laden".
   const [regionMode, setRegionMode] = useState<RegionMode>("de");
+  // "Nur meine Kanäle": schränkt die Suche auf die gespeicherten Kanäle ein
+  // (siehe api/analyze/route.ts) — wie regionMode gilt der beim Klick auf
+  // "Suchen"/"Mehr laden" aktive Wert, ein Toggle mitten in der Anzeige löst
+  // keinen automatischen Refetch aus.
+  const [channelsOnly, setChannelsOnly] = useState(false);
   const [customLoading, setCustomLoading] = useState(false);
   const [customError, setCustomError] = useState<string | null>(null);
   // undefined = noch nicht gesucht, null = keine weitere Seite mehr, sonst YouTube-Token.
@@ -132,7 +142,7 @@ export default function SuchePage() {
     setIsLoadingMore(false);
     setLoadMoreError(null);
 
-    const es = new EventSource(buildSearchUrl(query, regionMode, searchFilters));
+    const es = new EventSource(buildSearchUrl(query, regionMode, searchFilters, channelsOnly));
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {
@@ -199,7 +209,9 @@ export default function SuchePage() {
     setBatchTotal(0);
     setBatchFinished(0);
 
-    const es = new EventSource(buildSearchUrl(lastQuery, regionMode, filters, nextPageToken));
+    const es = new EventSource(
+      buildSearchUrl(lastQuery, regionMode, filters, channelsOnly, nextPageToken)
+    );
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {
@@ -262,6 +274,9 @@ export default function SuchePage() {
 
   const isLoading = status === "loading";
   const isBusy = isLoading || isLoadingMore;
+  // Im "Nur meine Kanäle"-Modus ohne Suchbegriff ist lastQuery leer ("neueste
+  // Videos aus allen Kanälen") — dafür einen sprechenden Anzeigetext statt „“.
+  const queryLabel = lastQuery ? `„${lastQuery}“` : "Neueste Videos aus deinen Kanälen";
 
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-10 sm:px-6">
@@ -278,6 +293,8 @@ export default function SuchePage() {
         isLoading={isLoading}
         regionMode={regionMode}
         onRegionModeChange={setRegionMode}
+        channelsOnly={channelsOnly}
+        onChannelsOnlyChange={setChannelsOnly}
       />
 
       <CustomVideoForm
@@ -289,8 +306,8 @@ export default function SuchePage() {
       {status === "loading" || status === "done" ? (
         <p className="text-center text-xs text-muted">
           {isBusy
-            ? `Prüfe „${lastQuery}“ — ${batchFinished} von ${batchTotal || "?"} Videos fertig…`
-            : `„${lastQuery}“ — ${videos.length} Videos geprüft.`}
+            ? `Prüfe ${queryLabel} — ${batchFinished} von ${batchTotal || "?"} Videos fertig…`
+            : `${queryLabel} — ${videos.length} Videos geprüft.`}
         </p>
       ) : null}
 
@@ -320,7 +337,7 @@ export default function SuchePage() {
 
       {status !== "idle" && videos.length === 0 && !isLoading ? (
         <div className="flex flex-1 flex-col items-center justify-center gap-2 py-20 text-center text-muted">
-          <p className="text-sm">Keine Videos gefunden für &quot;{lastQuery}&quot;.</p>
+          <p className="text-sm">Keine Videos gefunden für {queryLabel}.</p>
         </div>
       ) : null}
 
