@@ -75,10 +75,8 @@ async function getJson<T>(url: URL, attempt = 0): Promise<T> {
   const res = await fetch(url.toString());
   if (!res.ok) {
     const body = await res.text();
-    // search.list mit channelId liefert gelegentlich einen transienten 403
-    // ("accountDelegationForbidden") ohne echten Berechtigungsgrund — ein
-    // bekannter YouTube-API-Flake, verifiziert durch mehrfach identische
-    // Anfragen, die abwechselnd 403 und 200 lieferten. Kurz erneut versuchen,
+    // YouTube liefert gelegentlich einen transienten 403 ohne echten
+    // Berechtigungsgrund (bekannter API-Flake). Kurz erneut versuchen,
     // statt sofort aufzugeben.
     if (res.status === 403 && attempt < 2) {
       await new Promise((resolve) => setTimeout(resolve, 400 * (attempt + 1)));
@@ -100,17 +98,12 @@ export async function searchVideoIds(
   // Dauerbrenner unabhängig vom Datum) nur lokal umzusortieren.
   order: "relevance" | "date" = "relevance",
   // ISO-Zeitstempel (siehe filters.ts periodToPublishedAfter) für den Zeitraum-Filter.
-  publishedAfter?: string,
-  // "Nur meine Kanäle"-Modus (siehe api/analyze/route.ts): schränkt die Suche auf
-  // einen einzelnen Kanal ein. YouTube erlaubt channelId auch ganz ohne q — so
-  // liefert ein leerer Suchbegriff die neuesten Videos des Kanals.
-  channelId?: string
+  publishedAfter?: string
 ): Promise<SearchPage> {
   const url = new URL(`${API_BASE}/search`);
   url.searchParams.set("part", "snippet");
   if (query) url.searchParams.set("q", query);
   url.searchParams.set("type", "video");
-  if (channelId) url.searchParams.set("channelId", channelId);
   if (region === "de") {
     url.searchParams.set("regionCode", "DE");
     url.searchParams.set("relevanceLanguage", "de");

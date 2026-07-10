@@ -1,6 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
-import { FAILURE_CACHE_TTL_MS } from "./config";
+import { FAILURE_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS } from "./config";
 import { supabase } from "./supabase";
 import type { AnalyzedVideo, SavedChannel, Urteil, VideoStatus } from "./types";
 
@@ -77,6 +77,52 @@ export async function setCachedUrteil(videoId: string, urteil: Urteil): Promise<
 
   if (error) {
     console.error(`Supabase-Cache-Schreiben fehlgeschlagen (${videoId}):`, error.message);
+  }
+}
+
+// Persistenter Cache für Stichwort-Suchergebnisse (search.list, Tabelle
+// "search_cache", siehe supabase/schema.sql) mit kurzer TTL (SEARCH_CACHE_TTL_MS)
+// — spart die 100 Quota-Einheiten von search.list, wenn dieselbe Suche
+// (gleiche q/region/order/publishedAfter/pageToken) kurz danach erneut
+// angefragt wird (Reload, Themen-Rotation, "Erneuern"). Anders als
+// urteil_cache soll dieser Cache NICHT dauerhaft sein, deshalb die
+// created_at-basierte Ablaufprüfung beim Lesen statt einer echten TTL-Spalte.
+export interface CachedSearchPage {
+  videoIds: string[];
+  nextPageToken: string | null;
+}
+
+export async function getCachedSearch(cacheKey: string): Promise<CachedSearchPage | undefined> {
+  const { data, error } = await supabase
+    .from("search_cache")
+    .select("video_ids, next_page_token, created_at")
+    .eq("cache_key", cacheKey)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`Supabase-Suchcache-Lookup fehlgeschlagen (${cacheKey}):`, error.message);
+    return undefined;
+  }
+  if (!data) return undefined;
+  if (Date.now() - new Date(data.created_at as string).getTime() > SEARCH_CACHE_TTL_MS) {
+    return undefined;
+  }
+  return {
+    videoIds: data.video_ids as string[],
+    nextPageToken: (data.next_page_token as string | null) ?? null,
+  };
+}
+
+export async function setCachedSearch(cacheKey: string, page: CachedSearchPage): Promise<void> {
+  const { error } = await supabase.from("search_cache").upsert({
+    cache_key: cacheKey,
+    video_ids: page.videoIds,
+    next_page_token: page.nextPageToken,
+    created_at: new Date().toISOString(),
+  });
+
+  if (error) {
+    console.error(`Supabase-Suchcache-Schreiben fehlgeschlagen (${cacheKey}):`, error.message);
   }
 }
 

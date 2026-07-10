@@ -88,6 +88,13 @@ export const WOLF_TOPICS: string[] = [
 
 // Wie lange ein fehlgeschlagenes Ergebnis im (In-Memory-)Fehler-Cache bleibt,
 // bevor für dasselbe Video erneut ein Transkript-Abruf versucht wird.
+// Wie lange ein Stichwort-Suchergebnis (search.list, 100 Quota-Einheiten) in
+// Supabase gecacht wird (siehe cache.ts getCachedSearch/setCachedSearch),
+// bevor dieselbe Suche erneut YouTube kostet. Kurz gehalten, damit neue
+// Videos zeitnah auftauchen — der Cache soll nur Doppel-Anfragen (Reload,
+// Themen-Rotation, "Erneuern") abfangen, keine echte Aktualität ersetzen.
+export const SEARCH_CACHE_TTL_MS = 2.5 * 60 * 60 * 1000;
+
 export const FAILURE_CACHE_TTL_MS = {
   // "kein Transkript" ist praktisch ein dauerhafter Fakt über das Video (Untertitel
   // deaktiviert o.ä.) — deshalb lange merken, spart unnötige Wiederholungsversuche.

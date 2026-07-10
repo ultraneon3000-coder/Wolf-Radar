@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { searchVideoIds, fetchVideoMeta } from "@/lib/youtube";
+import { fetchChannelFeed } from "@/lib/rss";
 import { buildExternalVideoMeta, detectVideoLink } from "@/lib/links";
 import {
   getTranscriptText,
@@ -9,9 +10,11 @@ import {
 import { analyzeTranscript } from "@/lib/analyze";
 import {
   getCachedFailure,
+  getCachedSearch,
   getCachedUrteil,
   listChannels,
   setCachedFailure,
+  setCachedSearch,
   setCachedUrteil,
 } from "@/lib/cache";
 import { DEMO_MODE, searchDemoVideos, type DemoVideo } from "@/lib/demo";
@@ -79,24 +82,18 @@ async function processDemoVideo(item: DemoVideo): Promise<AnalyzedVideo> {
   }
 }
 
-// Kombinierter Paginierungs-Zustand für den "Nur meine Kanäle"-Modus: pro
-// Kanal ein eigener YouTube-nextPageToken (null = dieser Kanal ist
-// ausgeschöpft). Wird als einzelner Base64-String kodiert, damit der Client
-// "Mehr laden" weiterhin mit einem einzigen, für ihn undurchsichtigen
-// pageToken-String bedienen kann — er muss nichts über Mehr-Kanal-Logik wissen.
-type ChannelPageState = Record<string, string | null>;
-
-function encodeChannelPageState(state: ChannelPageState): string {
-  return Buffer.from(JSON.stringify(state), "utf-8").toString("base64url");
-}
-
-function decodeChannelPageState(token: string | undefined): ChannelPageState | null {
-  if (!token) return null;
-  try {
-    return JSON.parse(Buffer.from(token, "base64url").toString("utf-8")) as ChannelPageState;
-  } catch {
-    return null;
-  }
+// Baut den Cache-Schlüssel für eine Stichwort-Suche (siehe cache.ts
+// getCachedSearch/setCachedSearch) aus allen Parametern, die das
+// search.list-Ergebnis beeinflussen — zwei Suchen mit identischen Werten
+// hier sind garantiert dieselbe YouTube-Anfrage.
+function buildSearchCacheKey(
+  q: string,
+  region: RegionMode,
+  order: "relevance" | "date",
+  publishedAfter: string | undefined,
+  pageToken: string | undefined
+): string {
+  return [q, region, order, publishedAfter ?? "", pageToken ?? ""].join("::");
 }
 
 // Verarbeitet `count` Elemente mit begrenzter Nebenläufigkeit (siehe
@@ -188,12 +185,15 @@ export async function GET(req: NextRequest) {
             send({ type: "result", video: result });
           });
         } else if (channelsOnly) {
-          // "Nur meine Kanäle": eine YouTube-Suche pro gespeichertem Kanal
-          // (channelId statt freiem Query), Ergebnisse zusammenführen. Da eine
-          // Video-ID nur zu genau einem Kanal gehören kann, ist eine
-          // Überschneidung zwischen Kanälen strukturell ausgeschlossen — die
-          // Set-Dedup unten fängt nur den (unwahrscheinlichen) Fall doppelter
-          // IDs innerhalb eines einzelnen Kanal-Ergebnisses ab.
+          // "Nur meine Kanäle": statt einer search.list-Anfrage pro
+          // gespeichertem Kanal (100 Quota-Einheiten × Kanalzahl) werden die
+          // öffentlichen RSS-Feeds aller Kanäle gelesen (0 Quota, siehe
+          // lib/rss.ts) und zusammengeführt. RSS liefert nur die ~15
+          // neuesten Videos pro Kanal, keine Relevanz-Sortierung und keine
+          // Region-Einschränkung — region/order sind in diesem Modus daher
+          // ohne Wirkung, es wird immer nach Datum sortiert. Der Suchbegriff
+          // (q) wird nicht an YouTube geschickt, sondern hier gegen
+          // Titel/Beschreibung der RSS-Treffer gefiltert.
           const savedChannels = listChannels();
           if (savedChannels.length === 0) {
             send({
@@ -203,57 +203,56 @@ export async function GET(req: NextRequest) {
             return;
           }
 
-          // Ohne Suchbegriff ergibt YouTubes Relevanz-Ranking keinen Sinn
-          // (nichts, wozu "relevant" sein könnte) — dann immer nach Datum
-          // sortiert abfragen, damit "kein Suchbegriff" wirklich die
-          // neuesten Videos liefert (siehe Anforderung).
-          const effectiveOrder: "relevance" | "date" = q ? order : "date";
-
-          const priorState = decodeChannelPageState(pageToken);
-          const results = await Promise.all(
-            savedChannels.map(async (channel) => {
-              const channelToken = priorState?.[channel.channelId];
-              if (priorState && channelToken === null) {
-                // Dieser Kanal war in einer früheren Seite schon ausgeschöpft.
-                return { channelId: channel.channelId, page: { videoIds: [], nextPageToken: null } };
-              }
-              const page = await searchVideoIds(
-                q ?? "",
-                SEARCH_CONFIG.pageSize,
-                channelToken ?? undefined,
-                region,
-                effectiveOrder,
-                publishedAfter,
-                channel.channelId
-              );
-              return { channelId: channel.channelId, page };
-            })
+          const feeds = await Promise.all(
+            savedChannels.map((channel) => fetchChannelFeed(channel.channelId))
           );
+          // Map statt Set-auf-Array, da eine Video-ID zwar strukturell nur zu
+          // einem Kanal gehören kann, ein einzelner Feed aber theoretisch
+          // doppelte Einträge liefern könnte.
+          const allEntries = [...new Map(feeds.flat().map((e) => [e.videoId, e])).values()];
 
-          const videoIds = [...new Set(results.flatMap((r) => r.page.videoIds))];
-          const nextState: ChannelPageState = {};
-          for (const r of results) nextState[r.channelId] = r.page.nextPageToken;
-          const hasMore = Object.values(nextState).some((token) => token !== null);
+          const qLower = q?.toLowerCase();
+          const publishedAfterMs = publishedAfter ? new Date(publishedAfter).getTime() : undefined;
+          const matched = allEntries
+            .filter((e) => {
+              if (qLower && !`${e.title} ${e.description}`.toLowerCase().includes(qLower)) {
+                return false;
+              }
+              if (publishedAfterMs !== undefined && new Date(e.publishedAt).getTime() < publishedAfterMs) {
+                return false;
+              }
+              return true;
+            })
+            .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
 
-          const videos = await fetchVideoMeta(videoIds);
-          send({
-            type: "meta",
-            total: videos.length,
-            nextPageToken: hasMore ? encodeChannelPageState(nextState) : null,
-          });
+          // Einfacher Offset statt YouTube-nextPageToken — die komplette,
+          // gefilterte Liste liegt bereits vor (RSS kennt keine Seiten).
+          const offset = pageToken ? Number(pageToken) || 0 : 0;
+          const pageEntries = matched.slice(offset, offset + SEARCH_CONFIG.pageSize);
+          const nextOffset = offset + SEARCH_CONFIG.pageSize;
+          const nextPageToken = nextOffset < matched.length ? String(nextOffset) : null;
+
+          const videos = await fetchVideoMeta(pageEntries.map((e) => e.videoId));
+          send({ type: "meta", total: videos.length, nextPageToken });
           await processAll(videos.length, async (i) => {
             const result = await processVideo(videos[i]);
             send({ type: "result", video: result });
           });
         } else {
-          const { videoIds, nextPageToken } = await searchVideoIds(
-            q as string,
-            SEARCH_CONFIG.pageSize,
-            pageToken,
-            region,
-            order,
-            publishedAfter
-          );
+          const cacheKey = buildSearchCacheKey(q as string, region, order, publishedAfter, pageToken);
+          let searchPage = await getCachedSearch(cacheKey);
+          if (!searchPage) {
+            searchPage = await searchVideoIds(
+              q as string,
+              SEARCH_CONFIG.pageSize,
+              pageToken,
+              region,
+              order,
+              publishedAfter
+            );
+            await setCachedSearch(cacheKey, searchPage);
+          }
+          const { videoIds, nextPageToken } = searchPage;
           const videos = await fetchVideoMeta(videoIds);
           send({ type: "meta", total: videos.length, nextPageToken });
           await processAll(videos.length, async (i) => {
