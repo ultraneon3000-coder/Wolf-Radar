@@ -3,11 +3,12 @@
 import { useState } from "react";
 import { CATEGORIES, STATEMENT_JUDGMENT_STYLES } from "@/lib/config";
 import { formatCompactNumber, formatDate } from "@/lib/format";
+import { useChannels } from "@/lib/channels-context";
 import { useFavorites } from "@/lib/favorites-context";
 import { useSeen } from "@/lib/seen-context";
 import type { AnalyzedVideo } from "@/lib/types";
 import { JudgmentBadge } from "./JudgmentBadge";
-import { EyeIcon, EyeOffIcon, StarIcon } from "./icons";
+import { ChannelAddIcon, ChannelCheckIcon, EyeIcon, EyeOffIcon, StarIcon } from "./icons";
 
 function categoryLabel(id: string): string {
   return CATEGORIES.find((c) => c.id === id)?.label ?? id;
@@ -19,7 +20,17 @@ export function ResultCard({ video }: { video: AnalyzedVideo }) {
   const favorite = isFavorite(video.videoId);
   const { isSeen, toggleSeen } = useSeen();
   const seen = isSeen(video.videoId);
+  const { isSaved: isChannelSaved, addChannel, removeChannel } = useChannels();
+  const channelSaved = isChannelSaved(video.channelId);
   const url = `https://www.youtube.com/watch?v=${video.videoId}`;
+
+  function handleToggleChannel() {
+    if (channelSaved) {
+      removeChannel(video.channelId);
+    } else {
+      addChannel({ channelId: video.channelId, title: video.channelTitle });
+    }
+  }
 
   return (
     <article className="flex flex-col overflow-hidden rounded-xl border border-line bg-surface shadow-sm transition hover:border-accent/30">
@@ -58,6 +69,28 @@ export function ResultCard({ video }: { video: AnalyzedVideo }) {
             <EyeOffIcon className="h-4 w-4 text-accent" />
           ) : (
             <EyeIcon className="h-4 w-4 text-ink" />
+          )}
+        </button>
+        <button
+          type="button"
+          onClick={handleToggleChannel}
+          aria-label={
+            channelSaved
+              ? `${video.channelTitle} aus "Meine Kanäle" entfernen`
+              : `${video.channelTitle} zu "Meine Kanäle" hinzufügen`
+          }
+          aria-pressed={channelSaved}
+          title={
+            channelSaved
+              ? `${video.channelTitle} aus "Meine Kanäle" entfernen`
+              : `${video.channelTitle} zu "Meine Kanäle" hinzufügen`
+          }
+          className="absolute bottom-2 right-2 rounded-full bg-canvas/70 p-1.5 backdrop-blur transition hover:bg-canvas"
+        >
+          {channelSaved ? (
+            <ChannelCheckIcon className="h-4 w-4 text-accent" />
+          ) : (
+            <ChannelAddIcon className="h-4 w-4 text-ink" />
           )}
         </button>
       </div>

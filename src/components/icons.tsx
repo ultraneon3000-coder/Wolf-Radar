@@ -89,6 +89,26 @@ export function ChannelIcon({ className }: IconProps) {
   );
 }
 
+export function ChannelAddIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className} aria-hidden="true">
+      <circle cx="9" cy="9" r="4" />
+      <path d="M2 20a7 7 0 0 1 12.5-4.3" />
+      <path d="M17.5 8.5v6M14.5 11.5h6" />
+    </svg>
+  );
+}
+
+export function ChannelCheckIcon({ className }: IconProps) {
+  return (
+    <svg {...base} className={className} aria-hidden="true">
+      <circle cx="9" cy="9" r="4" />
+      <path d="M2 20a7 7 0 0 1 12.5-4.3" />
+      <path d="M14.5 12.5l2 2 4-4.5" />
+    </svg>
+  );
+}
+
 export function TrashIcon({ className }: IconProps) {
   return (
     <svg {...base} className={className} aria-hidden="true">

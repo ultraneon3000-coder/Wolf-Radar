@@ -1,5 +1,5 @@
 import { detectLanguageFromText, normalizeLanguage } from "./language";
-import type { RegionMode, VideoMeta } from "./types";
+import type { ChannelCandidate, RegionMode, VideoMeta } from "./types";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -43,17 +43,12 @@ interface YoutubeThumbnails {
 interface YoutubeChannelSnippetItem {
   id: string;
   snippet?: { title?: string; thumbnails?: YoutubeThumbnails };
+  statistics?: { subscriberCount?: string; hiddenSubscriberCount?: boolean };
 }
 
 interface YoutubeChannelSearchItem {
   id?: { channelId?: string };
   snippet?: { title?: string; thumbnails?: YoutubeThumbnails };
-}
-
-export interface ResolvedChannel {
-  channelId: string;
-  title: string;
-  thumbnail: string;
 }
 
 const VIDEO_ID_RE = /^[0-9A-Za-z_-]{11}$/;
@@ -188,12 +183,23 @@ function thumbnailUrl(thumbnails?: YoutubeThumbnails): string {
   return thumbnails?.medium?.url ?? thumbnails?.default?.url ?? "";
 }
 
+function toChannelCandidate(item: YoutubeChannelSnippetItem): ChannelCandidate {
+  return {
+    channelId: item.id,
+    title: item.snippet?.title ?? item.id,
+    thumbnail: thumbnailUrl(item.snippet?.thumbnails),
+    subscriberCount: item.statistics?.hiddenSubscriberCount
+      ? null
+      : Number(item.statistics?.subscriberCount ?? 0),
+  };
+}
+
 type ChannelIdentifier =
   | { type: "id" | "handle" | "username"; value: string }
   | { type: "query"; value: string };
 
 // Erkennt Kanal-URLs/Handles, damit "Meine Kanäle hinzufügen" sowohl mit einem
-// freien Namen als auch mit URL/@handle funktioniert (siehe resolveChannel).
+// freien Namen als auch mit URL/@handle funktioniert (siehe searchChannels).
 function parseChannelInput(input: string): ChannelIdentifier {
   const channelUrlMatch = input.match(/youtube\.com\/channel\/(UC[0-9A-Za-z_-]{10,})/);
   if (channelUrlMatch) return { type: "id", value: channelUrlMatch[1] };
@@ -210,66 +216,79 @@ function parseChannelInput(input: string): ChannelIdentifier {
   return { type: "query", value: input };
 }
 
-/** channels.list mit id/forHandle/forUsername -> Kanal-Snippet, oder null bei keinem Treffer. */
+/** channels.list mit id/forHandle/forUsername -> Kanal inkl. Abo-Zahl, oder null bei keinem Treffer. */
 async function fetchChannelByField(
   field: "id" | "forHandle" | "forUsername",
   value: string
-): Promise<ResolvedChannel | null> {
+): Promise<ChannelCandidate | null> {
   const url = new URL(`${API_BASE}/channels`);
-  url.searchParams.set("part", "snippet");
+  url.searchParams.set("part", "snippet,statistics");
   url.searchParams.set(field, value);
   url.searchParams.set("key", getApiKey());
 
   const data = await getJson<{ items?: YoutubeChannelSnippetItem[] }>(url);
   const item = data.items?.[0];
-  if (!item) return null;
-  return {
-    channelId: item.id,
-    title: item.snippet?.title ?? item.id,
-    thumbnail: thumbnailUrl(item.snippet?.thumbnails),
-  };
+  return item ? toChannelCandidate(item) : null;
 }
 
-/** search.list (type=channel) -> ersten Treffer für einen freien Kanal-Namen. */
-async function searchChannelByQuery(query: string): Promise<ResolvedChannel | null> {
+/** channels.list mit id -> Kanal inkl. Abo-Zahl für eine bekannte channelId (z.B. "Kanal von Video merken"). */
+export async function fetchChannelById(channelId: string): Promise<ChannelCandidate | null> {
+  return fetchChannelByField("id", channelId);
+}
+
+/**
+ * search.list (type=channel) -> bis zu `limit` Treffer für einen freien
+ * Kanal-Namen. search.list liefert keine Abo-Zahl -> ein zweiter
+ * channels.list-Batch-Call reichert die Treffer damit an (wie
+ * fetchChannelSubscribers für Video-Metadaten).
+ */
+async function searchChannelsByQuery(query: string, limit: number): Promise<ChannelCandidate[]> {
   const url = new URL(`${API_BASE}/search`);
   url.searchParams.set("part", "snippet");
   url.searchParams.set("type", "channel");
   url.searchParams.set("q", query);
-  url.searchParams.set("maxResults", "1");
+  url.searchParams.set("maxResults", String(Math.min(Math.max(limit, 1), 50)));
   url.searchParams.set("key", getApiKey());
 
   const data = await getJson<{ items?: YoutubeChannelSearchItem[] }>(url);
-  const item = data.items?.[0];
-  const channelId = item?.id?.channelId;
-  if (!channelId) return null;
-  return {
-    channelId,
-    title: item?.snippet?.title ?? channelId,
-    thumbnail: thumbnailUrl(item?.snippet?.thumbnails),
-  };
+  const channelIds = (data.items ?? [])
+    .map((item) => item.id?.channelId)
+    .filter((id): id is string => Boolean(id));
+  if (channelIds.length === 0) return [];
+
+  const statsUrl = new URL(`${API_BASE}/channels`);
+  statsUrl.searchParams.set("part", "snippet,statistics");
+  statsUrl.searchParams.set("id", channelIds.join(","));
+  statsUrl.searchParams.set("key", getApiKey());
+  const statsData = await getJson<{ items?: YoutubeChannelSnippetItem[] }>(statsUrl);
+  const byId = new Map(statsData.items?.map((item) => [item.id, toChannelCandidate(item)]));
+
+  // Reihenfolge von search.list (Relevanz-Ranking) beibehalten, nicht die
+  // Reihenfolge der channels.list-Antwort.
+  return channelIds.map((id) => byId.get(id)).filter((c): c is ChannelCandidate => Boolean(c));
 }
 
 /**
  * Löst Kanal-Name, -URL (/channel/UC…, /@handle, /user/name) oder @handle zu
- * channelId + Titel + Thumbnail auf (für "Meine Kanäle hinzufügen"). Bei
- * Handle/Username ohne direkten Treffer (z.B. Handle noch nicht indexiert)
- * fällt es auf eine Namenssuche zurück.
+ * einer Liste von Kandidaten auf (für "Meine Kanäle hinzufügen") — der Nutzer
+ * wählt gezielt aus, statt dass automatisch der erste Treffer gespeichert
+ * wird. Direkte URL/@handle/ID-Eingaben liefern in der Regel genau einen
+ * Kandidaten; ein freier Name liefert bis zu `limit` Treffer.
  */
-export async function resolveChannel(input: string): Promise<ResolvedChannel | null> {
+export async function searchChannels(input: string, limit = 5): Promise<ChannelCandidate[]> {
   const identifier = parseChannelInput(input.trim());
 
   if (identifier.type === "id") {
-    return fetchChannelByField("id", identifier.value);
+    const channel = await fetchChannelByField("id", identifier.value);
+    return channel ? [channel] : [];
   }
   if (identifier.type === "handle") {
-    return (await fetchChannelByField("forHandle", identifier.value)) ?? searchChannelByQuery(identifier.value);
+    const channel = await fetchChannelByField("forHandle", identifier.value);
+    return channel ? [channel] : searchChannelsByQuery(identifier.value, limit);
   }
   if (identifier.type === "username") {
-    return (
-      (await fetchChannelByField("forUsername", identifier.value)) ??
-      searchChannelByQuery(identifier.value)
-    );
+    const channel = await fetchChannelByField("forUsername", identifier.value);
+    return channel ? [channel] : searchChannelsByQuery(identifier.value, limit);
   }
-  return searchChannelByQuery(identifier.value);
+  return searchChannelsByQuery(identifier.value, limit);
 }
