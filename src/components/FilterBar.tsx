@@ -4,12 +4,14 @@ import {
   PERIOD_OPTIONS,
   SORT_OPTIONS,
   SUBSCRIBER_BUCKETS,
+  VIDEO_TYPE_OPTIONS,
   VIEW_BUCKETS,
   type DateRangeFilter,
   type FilterState,
   type LanguageFilter,
   type PeriodFilter,
   type SortOption,
+  type VideoTypeFilter,
 } from "@/lib/filters";
 
 const selectClasses =
@@ -69,6 +71,18 @@ export function FilterBar({
         onChange={(e) => onChange({ ...filters, language: e.target.value as LanguageFilter })}
       >
         {LANGUAGE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+
+      <select
+        className={selectClasses}
+        value={filters.videoType}
+        onChange={(e) => onChange({ ...filters, videoType: e.target.value as VideoTypeFilter })}
+      >
+        {VIDEO_TYPE_OPTIONS.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
           </option>

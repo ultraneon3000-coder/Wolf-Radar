@@ -37,7 +37,7 @@ export function CustomVideoForm({
           type="text"
           value={value}
           onChange={(e) => setValue(e.target.value)}
-          placeholder="YouTube-Link oder Video-ID einfügen…"
+          placeholder="YouTube-, TikTok- oder Instagram-Link (oder YouTube-Video-ID)…"
           className="flex-1 rounded-md border border-line bg-canvas px-3 py-1.5 text-sm text-ink outline-none placeholder:text-muted focus:border-accent"
         />
         <button

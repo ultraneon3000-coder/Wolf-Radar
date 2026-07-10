@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
-import { extractVideoId, searchVideoIds, fetchVideoMeta } from "@/lib/youtube";
+import { searchVideoIds, fetchVideoMeta } from "@/lib/youtube";
+import { buildExternalVideoMeta, detectVideoLink } from "@/lib/links";
 import {
   getTranscriptText,
   TranscriptBlockedError,
@@ -24,7 +25,14 @@ function sseLine(event: AnalyzeEvent): string {
   return `data: ${JSON.stringify(event)}\n\n`;
 }
 
-async function processVideo(meta: VideoMeta): Promise<AnalyzedVideo> {
+// transcriptUrl: volle Video-URL für Supadata (siehe lib/links.ts) — bei
+// normalen Suchergebnissen implizit die YouTube-URL zur videoId, beim
+// "Eigenes Video analysieren"-Feld (route unten) explizit die erkannte
+// YouTube-/TikTok-/Instagram-URL.
+async function processVideo(
+  meta: VideoMeta,
+  transcriptUrl: string = `https://youtu.be/${meta.videoId}`
+): Promise<AnalyzedVideo> {
   const cachedUrteil = await getCachedUrteil(meta.videoId);
   if (cachedUrteil) {
     return { ...meta, status: "ok", urteil: cachedUrteil };
@@ -37,7 +45,7 @@ async function processVideo(meta: VideoMeta): Promise<AnalyzedVideo> {
   }
 
   try {
-    const transcript = await getTranscriptText(meta.videoId);
+    const transcript = await getTranscriptText(transcriptUrl);
     const urteil = await analyzeTranscript(transcript);
     await setCachedUrteil(meta.videoId, urteil);
     return { ...meta, status: "ok", urteil };
@@ -137,20 +145,34 @@ export async function GET(req: NextRequest) {
       try {
         if (urlParam) {
           // "Eigenes Video analysieren": nimmt IMMER den echten Live-Weg
-          // (YouTube-API + Transkript-Abruf + Claude), unabhängig vom
-          // Demo-Modus — beweist, dass die App mit jedem Video funktioniert.
-          const videoId = extractVideoId(urlParam);
-          if (!videoId) {
-            send({ type: "error", message: "Ungültige YouTube-URL oder Video-ID." });
+          // (Transkript-Abruf + Claude), unabhängig vom Demo-Modus — beweist,
+          // dass die App mit jedem YouTube-, TikTok- oder Instagram-Video
+          // funktioniert. Nur YouTube hat eine Metadaten-API (Titel/Thumbnail/
+          // Aufrufe/Dauer); für TikTok/Instagram wird ein Mindest-VideoMeta
+          // aus der URL selbst gebaut (siehe lib/links.ts).
+          const link = detectVideoLink(urlParam);
+          if (!link) {
+            send({
+              type: "error",
+              message: "Ungültiger Link — unterstützt werden YouTube-, TikTok- und Instagram-Links.",
+            });
             return;
           }
-          const [meta] = await fetchVideoMeta([videoId]);
-          if (!meta) {
-            send({ type: "error", message: "Video nicht gefunden (privat, gelöscht oder falsche ID?)." });
-            return;
+
+          let meta: VideoMeta;
+          if (link.platform === "youtube") {
+            const [fetched] = await fetchVideoMeta([link.id]);
+            if (!fetched) {
+              send({ type: "error", message: "Video nicht gefunden (privat, gelöscht oder falsche ID?)." });
+              return;
+            }
+            meta = fetched;
+          } else {
+            meta = buildExternalVideoMeta(link);
           }
+
           send({ type: "meta", total: 1 });
-          const result = await processVideo(meta);
+          const result = await processVideo(meta, link.url);
           send({ type: "result", video: result });
           send({ type: "done" });
           return;

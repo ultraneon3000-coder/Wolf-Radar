@@ -51,6 +51,9 @@ function toVideoMeta(m: DemoMetaEntry): VideoMeta {
     viewCount: m.views,
     channelSubscriberCount: m.subscribers,
     language: detectLanguageFromText(m.title),
+    durationSeconds: null,
+    platform: "youtube",
+    sourceUrl: `https://www.youtube.com/watch?v=${m.video_id}`,
   };
 }
 

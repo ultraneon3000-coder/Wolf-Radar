@@ -64,13 +64,13 @@ function throttled<T>(task: () => Promise<T>): Promise<T> {
  * HTTP 206 zurück, nicht mit einem 4xx/5xx-Status.
  */
 function classifyAndThrow(
-  videoId: string,
+  sourceUrl: string,
   status: number,
   body: SupadataErrorResponse | null,
   rawText: string
 ): never {
   console.error(
-    `[transcript] ${videoId}: Supadata ${status} ${body?.error ?? "?"}: ${body?.details ?? body?.message ?? rawText}`
+    `[transcript] ${sourceUrl}: Supadata ${status} ${body?.error ?? "?"}: ${body?.details ?? body?.message ?? rawText}`
   );
 
   const code = body?.error;
@@ -86,15 +86,18 @@ function classifyAndThrow(
   throw new Error(GENERIC_TRANSCRIPT_ERROR_MESSAGE);
 }
 
-async function fetchTranscript(videoId: string): Promise<string> {
+// sourceUrl ist die volle Video-URL (YouTube: youtu.be/<id>, TikTok/Instagram:
+// die Original-URL) — Supadata bedient alle drei Plattformen über denselben
+// Endpunkt, nur die URL entscheidet über die Plattform (siehe lib/links.ts).
+async function fetchTranscript(sourceUrl: string): Promise<string> {
   const apiKey = process.env.SUPADATA_API_KEY;
   if (!apiKey) {
-    console.error(`[transcript] ${videoId}: SUPADATA_API_KEY ist nicht gesetzt.`);
+    console.error(`[transcript] ${sourceUrl}: SUPADATA_API_KEY ist nicht gesetzt.`);
     throw new Error(GENERIC_TRANSCRIPT_ERROR_MESSAGE);
   }
 
   const url = new URL(SUPADATA_TRANSCRIPT_URL);
-  url.searchParams.set("url", `https://youtu.be/${videoId}`);
+  url.searchParams.set("url", sourceUrl);
   // Supadata bevorzugt die angegebene Sprache, fällt aber selbst automatisch auf
   // eine verfügbare Sprache zurück, wenn Deutsch nicht existiert (verifiziert: ein
   // Video mit nur deutschen Untertiteln liefert bei lang=en trotzdem die deutschen,
@@ -106,7 +109,7 @@ async function fetchTranscript(videoId: string): Promise<string> {
   try {
     res = await fetch(url, { headers: { "x-api-key": apiKey } });
   } catch (err) {
-    console.error(`[transcript] ${videoId}: Netzwerkfehler beim Supadata-Aufruf:`, err);
+    console.error(`[transcript] ${sourceUrl}: Netzwerkfehler beim Supadata-Aufruf:`, err);
     throw new Error(GENERIC_TRANSCRIPT_ERROR_MESSAGE);
   }
 
@@ -121,10 +124,10 @@ async function fetchTranscript(videoId: string): Promise<string> {
   // Nicht nur auf res.ok verlassen: "transcript-unavailable" kommt mit HTTP 206
   // zurück, was fetch als "ok" behandelt.
   if (data && "error" in data) {
-    classifyAndThrow(videoId, res.status, data, rawText);
+    classifyAndThrow(sourceUrl, res.status, data, rawText);
   }
   if (!res.ok || !data) {
-    classifyAndThrow(videoId, res.status, null, rawText);
+    classifyAndThrow(sourceUrl, res.status, null, rawText);
   }
 
   const text = (data.content ?? []).map((s) => s.text).join(" ").trim();
@@ -134,7 +137,7 @@ async function fetchTranscript(videoId: string): Promise<string> {
   return text;
 }
 
-/** Holt das Transkript über den gehosteten Dienst Supadata, bevorzugt Deutsch. */
-export async function getTranscriptText(videoId: string): Promise<string> {
-  return throttled(() => fetchTranscript(videoId));
+/** Holt das Transkript über den gehosteten Dienst Supadata (YouTube/TikTok/Instagram), bevorzugt Deutsch. */
+export async function getTranscriptText(sourceUrl: string): Promise<string> {
+  return throttled(() => fetchTranscript(sourceUrl));
 }

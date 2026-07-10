@@ -16,6 +16,12 @@ export interface Urteil {
   aussagen: Aussage[];
 }
 
+// "Eigenes Video analysieren" akzeptiert YouTube-, TikTok- und Instagram-Links
+// (siehe lib/links.ts) — für TikTok/Instagram gibt es keine YouTube-Metadaten-API,
+// deshalb muss die UI (z.B. ResultCard) je nach Plattform unterscheiden, welche
+// Felder verlässlich sind (z.B. keine echte YouTube-channelId zum Kanal-Speichern).
+export type VideoPlatform = "youtube" | "tiktok" | "instagram";
+
 export interface VideoMeta {
   videoId: string;
   title: string;
@@ -28,6 +34,14 @@ export interface VideoMeta {
   // Normalisierter Sprachcode (z.B. "de", "en") aus defaultAudioLanguage/
   // defaultLanguage, sonst per Titel/Beschreibung geraten — siehe lib/language.ts.
   language: string | null;
+  // Aus contentDetails.duration (ISO 8601) geparst, für den "Video/Short"-Filter
+  // (siehe lib/filters.ts) — null, wenn keine Dauer-Info verfügbar ist (z.B.
+  // TikTok/Instagram ohne YouTube-Metadaten).
+  durationSeconds: number | null;
+  platform: VideoPlatform;
+  // Klickziel der Karte (siehe ResultCard) — bei YouTube der watch?v=-Link, bei
+  // TikTok/Instagram die Original-URL, da videoId dort kein YouTube-Format hat.
+  sourceUrl: string;
 }
 
 // Umschalter in der Suchleiste: "de" schränkt die YouTube-Suche auf

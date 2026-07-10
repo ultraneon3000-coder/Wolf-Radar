@@ -4,9 +4,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { ResultCard } from "@/components/ResultCard";
 import { RegionModeToggle } from "@/components/RegionModeToggle";
 import { WOLF_TOPICS } from "@/lib/config";
-import { DEFAULT_FILTERS, filterAndSortVideos } from "@/lib/filters";
+import {
+  DATE_RANGE_OPTIONS,
+  DEFAULT_FILTERS,
+  filterAndSortVideos,
+  VIEW_BUCKETS,
+  type DateRangeFilter,
+  type FilterState,
+} from "@/lib/filters";
 import { useSeen } from "@/lib/seen-context";
 import type { AnalyzeEvent, AnalyzedVideo, RegionMode } from "@/lib/types";
+
+const selectClasses =
+  "rounded-lg border border-line bg-surface px-3 py-2 text-sm text-ink outline-none focus:border-accent";
 
 // undefined = für dieses Thema noch keine Seite geladen, null = keine
 // weitere Seite mehr, sonst YouTube-nextPageToken für die nächste Seite.
@@ -32,6 +42,10 @@ export default function VorgeschlagenPage() {
   // Steuert regionCode=DE + relevanceLanguage=de bei der YouTube-Suche (siehe
   // api/analyze/route.ts) — ein Wechsel startet die Themen-Rotation neu.
   const [regionMode, setRegionMode] = useState<RegionMode>("de");
+  // Nur Upload-Datum + Aufrufe (analog zur Suchseite) — Kategorie/Kanal/Sprache/
+  // Sortierung bleiben hier bewusst fest (rotierende Themen-Übersicht, keine
+  // Detail-Suche), sort bleibt daher immer "fragwuerdig_views".
+  const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
   const { isSeen } = useSeen();
 
   // Kontrollfluss (welches Thema ist als Nächstes dran, welche Themen haben
@@ -157,6 +171,31 @@ export default function VorgeschlagenPage() {
     fetchTopicPage(idx, false);
   }
 
+  // Verwirft die aktuell angezeigten Vorschläge und holt die nächste 10er-Seite
+  // des als Nächstes fälligen Themas in der bestehenden Rotation (dieselbe
+  // Paginierungs-Logik wie "Mehr laden", nur mit geleerter Liste statt Anhängen).
+  function handleRefresh() {
+    if (isBusy) return;
+    esRef.current?.close();
+
+    let idx = nextAvailableTopicIndex(roundRobinRef.current);
+    if (idx === null) {
+      // Alle Themen dieser Rotation sind ausgeschöpft -> nächste komplette Runde.
+      tokensRef.current = {};
+      roundRobinRef.current = 0;
+      idx = 0;
+    }
+
+    setVideosById({});
+    setStatus("loading");
+    setErrorMessage(null);
+    setBatchTotal(0);
+    setBatchFinished(0);
+    setLoadMoreError(null);
+    setHasMore(true);
+    fetchTopicPage(idx, true);
+  }
+
   const videos = useMemo(() => Object.values(videosById), [videosById]);
   // "Schon gesehen" markierte Videos verschwinden aus dieser Liste (siehe
   // /gesehen) — Sortierung läuft konsequent auf der bereinigten Liste.
@@ -165,8 +204,8 @@ export default function VorgeschlagenPage() {
     [videos, isSeen]
   );
   const sorted = useMemo(
-    () => filterAndSortVideos(unseenVideos, DEFAULT_FILTERS),
-    [unseenVideos]
+    () => filterAndSortVideos(unseenVideos, filters),
+    [unseenVideos, filters]
   );
   const isBusy = status === "loading" || isLoadingMore;
 
@@ -175,12 +214,48 @@ export default function VorgeschlagenPage() {
       <header className="flex flex-col gap-2">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-bold tracking-tight text-ink">Vorgeschlagen</h1>
-          <RegionModeToggle mode={regionMode} onChange={setRegionMode} />
+          <div className="flex flex-wrap items-center gap-2">
+            <RegionModeToggle mode={regionMode} onChange={setRegionMode} />
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={isBusy}
+              className="rounded-full border border-line bg-surface px-3.5 py-1.5 text-xs font-medium text-ink transition hover:border-accent/40 disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              {isBusy ? "Lädt…" : "Erneuern"}
+            </button>
+          </div>
         </div>
         <p className="max-w-2xl text-sm text-muted">
           Rotierende Suche über Wolfs Kernthemen — gebündelt und sortiert nach
           „fragwürdig + höchste Reichweite zuerst“.
         </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <select
+            className={selectClasses}
+            value={filters.dateRange}
+            onChange={(e) =>
+              setFilters((f) => ({ ...f, dateRange: e.target.value as DateRangeFilter }))
+            }
+          >
+            {DATE_RANGE_OPTIONS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+          <select
+            className={selectClasses}
+            value={filters.minViews}
+            onChange={(e) => setFilters((f) => ({ ...f, minViews: Number(e.target.value) }))}
+          >
+            {VIEW_BUCKETS.map((o) => (
+              <option key={o.value} value={o.value}>
+                {o.label}
+              </option>
+            ))}
+          </select>
+        </div>
         <p className="text-xs text-muted">
           {isBusy
             ? `Prüfe „${currentTopic}“ — ${batchFinished} von ${batchTotal || "?"} Videos fertig…`

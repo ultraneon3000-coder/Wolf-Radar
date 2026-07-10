@@ -22,7 +22,7 @@ export function ResultCard({ video }: { video: AnalyzedVideo }) {
   const seen = isSeen(video.videoId);
   const { isSaved: isChannelSaved, addChannel, removeChannel } = useChannels();
   const channelSaved = isChannelSaved(video.channelId);
-  const url = `https://www.youtube.com/watch?v=${video.videoId}`;
+  const url = video.sourceUrl;
 
   function handleToggleChannel() {
     if (channelSaved) {
@@ -71,28 +71,34 @@ export function ResultCard({ video }: { video: AnalyzedVideo }) {
             <EyeIcon className="h-4 w-4 text-ink" />
           )}
         </button>
-        <button
-          type="button"
-          onClick={handleToggleChannel}
-          aria-label={
-            channelSaved
-              ? `${video.channelTitle} aus "Meine Kanäle" entfernen`
-              : `${video.channelTitle} zu "Meine Kanäle" hinzufügen`
-          }
-          aria-pressed={channelSaved}
-          title={
-            channelSaved
-              ? `${video.channelTitle} aus "Meine Kanäle" entfernen`
-              : `${video.channelTitle} zu "Meine Kanäle" hinzufügen`
-          }
-          className="absolute bottom-2 right-2 rounded-full bg-canvas/70 p-1.5 backdrop-blur transition hover:bg-canvas"
-        >
-          {channelSaved ? (
-            <ChannelCheckIcon className="h-4 w-4 text-accent" />
-          ) : (
-            <ChannelAddIcon className="h-4 w-4 text-ink" />
-          )}
-        </button>
+        {video.platform === "youtube" ? (
+          // "Meine Kanäle" ist eine YouTube-API-Funktion (channelId muss zu
+          // YouTube gehören) — bei TikTok/Instagram gäbe es keine echte
+          // channelId, das Symbol würde nur einen nicht funktionierenden
+          // Eintrag anlegen.
+          <button
+            type="button"
+            onClick={handleToggleChannel}
+            aria-label={
+              channelSaved
+                ? `${video.channelTitle} aus "Meine Kanäle" entfernen`
+                : `${video.channelTitle} zu "Meine Kanäle" hinzufügen`
+            }
+            aria-pressed={channelSaved}
+            title={
+              channelSaved
+                ? `${video.channelTitle} aus "Meine Kanäle" entfernen`
+                : `${video.channelTitle} zu "Meine Kanäle" hinzufügen`
+            }
+            className="absolute bottom-2 right-2 rounded-full bg-canvas/70 p-1.5 backdrop-blur transition hover:bg-canvas"
+          >
+            {channelSaved ? (
+              <ChannelCheckIcon className="h-4 w-4 text-accent" />
+            ) : (
+              <ChannelAddIcon className="h-4 w-4 text-ink" />
+            )}
+          </button>
+        ) : null}
       </div>
 
       <div className="flex flex-1 flex-col gap-3 p-4">

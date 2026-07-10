@@ -28,6 +28,7 @@ interface YoutubeVideoItem {
     };
   };
   statistics?: { viewCount?: string };
+  contentDetails?: { duration?: string };
 }
 
 interface YoutubeChannelItem {
@@ -148,12 +149,23 @@ async function fetchChannelSubscribers(channelIds: string[]): Promise<Map<string
   return result;
 }
 
-/** videos.list (statistics) + channels.list -> vollständige Video-Metadaten. */
+/** Parst eine ISO-8601-Dauer ("PT1M30S") in Sekunden, für den "Video/Short"-Filter. */
+function parseIso8601DurationToSeconds(duration?: string): number | null {
+  if (!duration) return null;
+  const match = duration.match(/^PT(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$/);
+  if (!match) return null;
+  const hours = Number(match[1] ?? 0);
+  const minutes = Number(match[2] ?? 0);
+  const seconds = Number(match[3] ?? 0);
+  return hours * 3600 + minutes * 60 + seconds;
+}
+
+/** videos.list (statistics, contentDetails) + channels.list -> vollständige Video-Metadaten. */
 export async function fetchVideoMeta(videoIds: string[]): Promise<VideoMeta[]> {
   if (videoIds.length === 0) return [];
 
   const url = new URL(`${API_BASE}/videos`);
-  url.searchParams.set("part", "snippet,statistics");
+  url.searchParams.set("part", "snippet,statistics,contentDetails");
   url.searchParams.set("id", videoIds.join(","));
   url.searchParams.set("key", getApiKey());
 
@@ -176,6 +188,9 @@ export async function fetchVideoMeta(videoIds: string[]): Promise<VideoMeta[]> {
     language:
       normalizeLanguage(it.snippet.defaultAudioLanguage ?? it.snippet.defaultLanguage) ??
       detectLanguageFromText(`${it.snippet.title} ${it.snippet.description ?? ""}`),
+    durationSeconds: parseIso8601DurationToSeconds(it.contentDetails?.duration),
+    platform: "youtube",
+    sourceUrl: `https://www.youtube.com/watch?v=${it.id}`,
   }));
 }
 
