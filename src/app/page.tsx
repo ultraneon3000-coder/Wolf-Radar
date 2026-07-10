@@ -2,10 +2,11 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ResultCard } from "@/components/ResultCard";
+import { RegionModeToggle } from "@/components/RegionModeToggle";
 import { WOLF_TOPICS } from "@/lib/config";
 import { DEFAULT_FILTERS, filterAndSortVideos } from "@/lib/filters";
 import { useSeen } from "@/lib/seen-context";
-import type { AnalyzeEvent, AnalyzedVideo } from "@/lib/types";
+import type { AnalyzeEvent, AnalyzedVideo, RegionMode } from "@/lib/types";
 
 // undefined = für dieses Thema noch keine Seite geladen, null = keine
 // weitere Seite mehr, sonst YouTube-nextPageToken für die nächste Seite.
@@ -28,6 +29,9 @@ export default function VorgeschlagenPage() {
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const [hasMore, setHasMore] = useState(true);
+  // Steuert regionCode=DE + relevanceLanguage=de bei der YouTube-Suche (siehe
+  // api/analyze/route.ts) — ein Wechsel startet die Themen-Rotation neu.
+  const [regionMode, setRegionMode] = useState<RegionMode>("de");
   const { isSeen } = useSeen();
 
   // Kontrollfluss (welches Thema ist als Nächstes dran, welche Themen haben
@@ -61,7 +65,7 @@ export default function VorgeschlagenPage() {
     const token = tokensRef.current[topic];
     setCurrentTopic(topic);
 
-    const url = `/api/analyze?q=${encodeURIComponent(topic)}${
+    const url = `/api/analyze?q=${encodeURIComponent(topic)}&region=${regionMode}${
       token ? `&pageToken=${encodeURIComponent(token)}` : ""
     }`;
     const es = new EventSource(url);
@@ -106,10 +110,25 @@ export default function VorgeschlagenPage() {
   }
 
   useEffect(() => {
-    // Alle State-Werte, die hier sonst zurückgesetzt würden, entsprechen
-    // bereits ihren useState-Initialwerten oben — der Effect läuft nur
-    // einmal beim Mount (leeres Deps-Array), ein Reset ist daher unnötig.
+    // Läuft beim Mount UND bei jedem regionMode-Wechsel — ein Moduswechsel
+    // (Deutschland <-> International) startet die Themen-Rotation komplett
+    // neu, da die bisher geladenen Videos zum neuen Modus nicht mehr passen.
+    cancelledRef.current = true;
+    esRef.current?.close();
     cancelledRef.current = false;
+
+    tokensRef.current = {};
+    roundRobinRef.current = 0;
+    setVideosById({});
+    setStatus("loading");
+    setErrorMessage(null);
+    setCurrentTopic(WOLF_TOPICS[0]);
+    setBatchTotal(0);
+    setBatchFinished(0);
+    setIsLoadingMore(false);
+    setLoadMoreError(null);
+    setHasMore(true);
+
     // Außerhalb des synchronen Effect-Bodys angestoßen (statt direkt hier),
     // damit das erste setState nicht synchron innerhalb des Effects landet.
     queueMicrotask(() => {
@@ -120,8 +139,8 @@ export default function VorgeschlagenPage() {
       cancelledRef.current = true;
       esRef.current?.close();
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- läuft bewusst nur einmal beim Mount, WOLF_TOPICS ist eine feste Konstante.
-  }, []);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- WOLF_TOPICS ist eine feste Konstante, fetchTopicPage/nextAvailableTopicIndex sind pro Render neu und bewusst nicht als Dep gelistet.
+  }, [regionMode]);
 
   function handleLoadMore() {
     if (isLoadingMore || status === "loading" || !hasMore) return;
@@ -154,7 +173,10 @@ export default function VorgeschlagenPage() {
   return (
     <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-4 py-10 sm:px-6">
       <header className="flex flex-col gap-2">
-        <h1 className="text-2xl font-bold tracking-tight text-ink">Vorgeschlagen</h1>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <h1 className="text-2xl font-bold tracking-tight text-ink">Vorgeschlagen</h1>
+          <RegionModeToggle mode={regionMode} onChange={setRegionMode} />
+        </div>
         <p className="max-w-2xl text-sm text-muted">
           Rotierende Suche über Wolfs Kernthemen — gebündelt und sortiert nach
           „fragwürdig + höchste Reichweite zuerst“.

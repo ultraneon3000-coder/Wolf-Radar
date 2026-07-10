@@ -3,12 +3,19 @@ import { daysSince } from "./format";
 import type { AnalyzedVideo } from "./types";
 
 export type DateRangeFilter = "alle" | "7" | "21" | "30" | "90";
+export type LanguageFilter = "alle" | "de" | "en";
 export type SortOption = "fragwuerdig_views" | "views_desc" | "date_desc" | "date_asc";
+// "egal" | Zeitraum, der als publishedAfter an YouTube durchgereicht wird (siehe
+// periodToPublishedAfter) — im Unterschied zu dateRange (rein lokaler Filter auf
+// die schon geladene Liste) schränkt period die YouTube-Suche selbst ein.
+export type PeriodFilter = "egal" | "year" | "6months" | "month";
 
 export interface FilterState {
   category: string; // "alle" | Kategorie-ID
   dateRange: DateRangeFilter;
   channel: string; // "alle" | exakter Kanalname
+  language: LanguageFilter;
+  period: PeriodFilter;
   minSubscribers: number;
   minViews: number;
   sort: SortOption;
@@ -18,6 +25,8 @@ export const DEFAULT_FILTERS: FilterState = {
   category: "alle",
   dateRange: "alle",
   channel: "alle",
+  language: "alle",
+  period: "egal",
   minSubscribers: 0,
   minViews: 0,
   sort: "fragwuerdig_views",
@@ -37,6 +46,32 @@ export const SUBSCRIBER_BUCKETS: { value: number; label: string }[] = [
   { value: 100_000, label: "ab 100.000 Abonnenten" },
   { value: 1_000_000, label: "ab 1 Mio. Abonnenten" },
 ];
+
+export const LANGUAGE_OPTIONS: { value: LanguageFilter; label: string }[] = [
+  { value: "alle", label: "Sprache: alle" },
+  { value: "de", label: "Deutsch" },
+  { value: "en", label: "Englisch" },
+];
+
+export const PERIOD_OPTIONS: { value: PeriodFilter; label: string }[] = [
+  { value: "egal", label: "Zeitraum: egal" },
+  { value: "year", label: "Letztes Jahr" },
+  { value: "6months", label: "Letzte 6 Monate" },
+  { value: "month", label: "Letzter Monat" },
+];
+
+const PERIOD_DAYS: Record<Exclude<PeriodFilter, "egal">, number> = {
+  year: 365,
+  "6months": 182,
+  month: 30,
+};
+
+/** Wandelt die Zeitraum-Auswahl in einen publishedAfter-ISO-Zeitstempel für die YouTube-Suche um. */
+export function periodToPublishedAfter(period: PeriodFilter): string | undefined {
+  if (period === "egal") return undefined;
+  const days = PERIOD_DAYS[period];
+  return new Date(Date.now() - days * 24 * 60 * 60 * 1000).toISOString();
+}
 
 export const VIEW_BUCKETS: { value: number; label: string }[] = [
   { value: 0, label: "Aufrufe: alle" },
@@ -70,6 +105,7 @@ export function filterAndSortVideos(
       return false;
     }
     if (filters.channel !== "alle" && v.channelTitle !== filters.channel) return false;
+    if (filters.language !== "alle" && v.language !== filters.language) return false;
     if (v.channelSubscriberCount < filters.minSubscribers) return false;
     if (v.viewCount < filters.minViews) return false;
     return true;

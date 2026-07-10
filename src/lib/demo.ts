@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import { detectLanguageFromText } from "./language";
 import type { VideoMeta } from "./types";
 
 // Demo-Modus: umgeht den Live-YouTube-/Transkript-Abruf (dauerhaft IP-geblockt)
@@ -49,6 +50,7 @@ function toVideoMeta(m: DemoMetaEntry): VideoMeta {
     thumbnail: m.thumbnail,
     viewCount: m.views,
     channelSubscriberCount: m.subscribers,
+    language: detectLanguageFromText(m.title),
   };
 }
 

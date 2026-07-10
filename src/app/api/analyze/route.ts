@@ -14,7 +14,7 @@ import {
 } from "@/lib/cache";
 import { DEMO_MODE, searchDemoVideos, type DemoVideo } from "@/lib/demo";
 import { SEARCH_CONFIG } from "@/lib/config";
-import type { AnalyzedVideo, AnalyzeEvent, VideoMeta } from "@/lib/types";
+import type { AnalyzedVideo, AnalyzeEvent, RegionMode, VideoMeta } from "@/lib/types";
 
 // Nutzt fs (Cache) und den Anthropic SDK-Client — braucht die Node.js-Runtime, kein Edge.
 export const runtime = "nodejs";
@@ -90,6 +90,11 @@ export async function GET(req: NextRequest) {
   const q = req.nextUrl.searchParams.get("q")?.trim();
   const urlParam = req.nextUrl.searchParams.get("url")?.trim();
   const pageToken = req.nextUrl.searchParams.get("pageToken")?.trim() || undefined;
+  const region: RegionMode =
+    req.nextUrl.searchParams.get("region") === "international" ? "international" : "de";
+  const order: "relevance" | "date" =
+    req.nextUrl.searchParams.get("order") === "date" ? "date" : "relevance";
+  const publishedAfter = req.nextUrl.searchParams.get("publishedAfter")?.trim() || undefined;
 
   if (!q && !urlParam) {
     return new Response(JSON.stringify({ error: "Suchbegriff (q) oder url fehlt." }), {
@@ -140,7 +145,10 @@ export async function GET(req: NextRequest) {
           const { videoIds, nextPageToken } = await searchVideoIds(
             q as string,
             SEARCH_CONFIG.pageSize,
-            pageToken
+            pageToken,
+            region,
+            order,
+            publishedAfter
           );
           const videos = await fetchVideoMeta(videoIds);
           send({ type: "meta", total: videos.length, nextPageToken });

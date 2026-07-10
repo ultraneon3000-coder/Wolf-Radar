@@ -25,7 +25,15 @@ export interface VideoMeta {
   thumbnail: string;
   viewCount: number;
   channelSubscriberCount: number;
+  // Normalisierter Sprachcode (z.B. "de", "en") aus defaultAudioLanguage/
+  // defaultLanguage, sonst per Titel/Beschreibung geraten — siehe lib/language.ts.
+  language: string | null;
 }
+
+// Umschalter in der Suchleiste: "de" schränkt die YouTube-Suche auf
+// regionCode=DE + relevanceLanguage=de ein, "international" sucht ohne
+// diese Einschränkung (siehe lib/youtube.ts searchVideoIds).
+export type RegionMode = "de" | "international";
 
 export type VideoStatus = "ok" | "kein_transkript" | "fehler";
 

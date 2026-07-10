@@ -1,4 +1,5 @@
-import type { VideoMeta } from "./types";
+import { detectLanguageFromText, normalizeLanguage } from "./language";
+import type { RegionMode, VideoMeta } from "./types";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -15,9 +16,12 @@ interface YoutubeVideoItem {
   id: string;
   snippet: {
     title: string;
+    description?: string;
     channelId: string;
     channelTitle: string;
     publishedAt: string;
+    defaultAudioLanguage?: string;
+    defaultLanguage?: string;
     thumbnails?: {
       medium?: { url: string };
       default?: { url: string };
@@ -63,13 +67,25 @@ async function getJson<T>(url: URL): Promise<T> {
 export async function searchVideoIds(
   query: string,
   maxResults: number,
-  pageToken?: string
+  pageToken?: string,
+  region: RegionMode = "de",
+  // "date" holt echte, aktuelle Videos von YouTube (Sortier-Filter "Neueste
+  // zuerst"), statt YouTubes Default-Relevanzranking (bevorzugt alte
+  // Dauerbrenner unabhängig vom Datum) nur lokal umzusortieren.
+  order: "relevance" | "date" = "relevance",
+  // ISO-Zeitstempel (siehe filters.ts periodToPublishedAfter) für den Zeitraum-Filter.
+  publishedAfter?: string
 ): Promise<SearchPage> {
   const url = new URL(`${API_BASE}/search`);
   url.searchParams.set("part", "snippet");
   url.searchParams.set("q", query);
   url.searchParams.set("type", "video");
-  url.searchParams.set("relevanceLanguage", "de");
+  if (region === "de") {
+    url.searchParams.set("regionCode", "DE");
+    url.searchParams.set("relevanceLanguage", "de");
+  }
+  if (order === "date") url.searchParams.set("order", "date");
+  if (publishedAfter) url.searchParams.set("publishedAfter", publishedAfter);
   url.searchParams.set("maxResults", String(Math.min(Math.max(maxResults, 1), 50)));
   url.searchParams.set("key", getApiKey());
   if (pageToken) url.searchParams.set("pageToken", pageToken);
@@ -127,5 +143,8 @@ export async function fetchVideoMeta(videoIds: string[]): Promise<VideoMeta[]> {
       it.snippet.thumbnails?.medium?.url ?? it.snippet.thumbnails?.default?.url ?? "",
     viewCount: Number(it.statistics?.viewCount ?? 0),
     channelSubscriberCount: subscribers.get(it.snippet.channelId) ?? 0,
+    language:
+      normalizeLanguage(it.snippet.defaultAudioLanguage ?? it.snippet.defaultLanguage) ??
+      detectLanguageFromText(`${it.snippet.title} ${it.snippet.description ?? ""}`),
   }));
 }

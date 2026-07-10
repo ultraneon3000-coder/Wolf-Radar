@@ -7,9 +7,14 @@ import { CategoryTabs, ALL_CATEGORY } from "@/components/CategoryTabs";
 import { FilterBar } from "@/components/FilterBar";
 import { ResultCard } from "@/components/ResultCard";
 import { CATEGORIES } from "@/lib/config";
-import { DEFAULT_FILTERS, filterAndSortVideos, type FilterState } from "@/lib/filters";
+import {
+  DEFAULT_FILTERS,
+  filterAndSortVideos,
+  periodToPublishedAfter,
+  type FilterState,
+} from "@/lib/filters";
 import { useSeen } from "@/lib/seen-context";
-import type { AnalyzeEvent, AnalyzedVideo } from "@/lib/types";
+import type { AnalyzeEvent, AnalyzedVideo, RegionMode } from "@/lib/types";
 
 type Status = "idle" | "loading" | "done" | "error";
 
@@ -23,6 +28,24 @@ function appendVideoDeduped(
   return prev.some((v) => v.videoId === video.videoId) ? prev : [...prev, video];
 }
 
+// "Neueste zuerst" (sort) und der Zeitraum-Filter (period) betreffen nicht nur
+// die lokale Sortierung/Anzeige, sondern müssen echte YouTube-Suchparameter
+// werden (order=date / publishedAfter) — sonst holt "Neueste zuerst" nur die
+// immer gleichen, relevanzsortierten Treffer und sortiert sie bloß lokal um.
+function buildSearchUrl(
+  query: string,
+  region: RegionMode,
+  filters: Pick<FilterState, "sort" | "period">,
+  pageToken?: string
+): string {
+  const params = new URLSearchParams({ q: query, region });
+  if (filters.sort === "date_desc") params.set("order", "date");
+  const publishedAfter = periodToPublishedAfter(filters.period);
+  if (publishedAfter) params.set("publishedAfter", publishedAfter);
+  if (pageToken) params.set("pageToken", pageToken);
+  return `/api/analyze?${params.toString()}`;
+}
+
 export default function SuchePage() {
   const [videos, setVideos] = useState<AnalyzedVideo[]>([]);
   const [status, setStatus] = useState<Status>("idle");
@@ -33,6 +56,9 @@ export default function SuchePage() {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [lastQuery, setLastQuery] = useState("");
   const [filters, setFilters] = useState<FilterState>(DEFAULT_FILTERS);
+  // Steuert regionCode=DE + relevanceLanguage=de bei der YouTube-Suche (siehe
+  // api/analyze/route.ts) — gilt für die normale Suche UND "Mehr laden".
+  const [regionMode, setRegionMode] = useState<RegionMode>("de");
   const [customLoading, setCustomLoading] = useState(false);
   const [customError, setCustomError] = useState<string | null>(null);
   // undefined = noch nicht gesucht, null = keine weitere Seite mehr, sonst YouTube-Token.
@@ -89,7 +115,11 @@ export default function SuchePage() {
     };
   }
 
-  function handleSearch(query: string) {
+  // Startet eine komplett frische Suche (leert die geladene Liste) — genutzt
+  // sowohl vom Suchen-Button (mit zurückgesetzten Filtern) als auch, wenn
+  // sort/period sich ändern und dadurch andere YouTube-Suchparameter (order/
+  // publishedAfter) erfordern (siehe handleFiltersChange).
+  function startSearch(query: string, searchFilters: FilterState) {
     eventSourceRef.current?.close();
 
     setLastQuery(query);
@@ -97,12 +127,12 @@ export default function SuchePage() {
     setBatchTotal(0);
     setBatchFinished(0);
     setErrorMessage(null);
-    setFilters(DEFAULT_FILTERS);
     setStatus("loading");
     setNextPageToken(undefined);
+    setIsLoadingMore(false);
     setLoadMoreError(null);
 
-    const es = new EventSource(`/api/analyze?q=${encodeURIComponent(query)}`);
+    const es = new EventSource(buildSearchUrl(query, regionMode, searchFilters));
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {
@@ -136,6 +166,27 @@ export default function SuchePage() {
     };
   }
 
+  function handleSearch(query: string) {
+    setFilters(DEFAULT_FILTERS);
+    startSearch(query, DEFAULT_FILTERS);
+  }
+
+  // FilterBar-Änderungen sind normalerweise rein lokal (Kategorie, Kanal,
+  // Sprache, Abo-/Aufrufzahlen, Sortierung) — sort=date_desc und period sind
+  // die Ausnahme: die bestimmen echte YouTube-Suchparameter (order/
+  // publishedAfter), also muss eine Änderung dort eine neue Suche auslösen,
+  // statt nur die schon geladene Liste umzusortieren.
+  function handleFiltersChange(next: FilterState) {
+    const needsResearch =
+      next.period !== filters.period ||
+      (next.sort === "date_desc") !== (filters.sort === "date_desc");
+
+    setFilters(next);
+    if (needsResearch && lastQuery) {
+      startSearch(lastQuery, next);
+    }
+  }
+
   // Holt die nächste 10er-Seite über den zuletzt gemerkten nextPageToken und
   // hängt die Ergebnisse an die bestehende Liste an (siehe videos.length-basierte
   // Counts/Filter/Sortierung oben — die greifen automatisch auf die volle Liste).
@@ -148,9 +199,7 @@ export default function SuchePage() {
     setBatchTotal(0);
     setBatchFinished(0);
 
-    const es = new EventSource(
-      `/api/analyze?q=${encodeURIComponent(lastQuery)}&pageToken=${encodeURIComponent(nextPageToken)}`
-    );
+    const es = new EventSource(buildSearchUrl(lastQuery, regionMode, filters, nextPageToken));
     eventSourceRef.current = es;
 
     es.onmessage = (event) => {
@@ -224,7 +273,12 @@ export default function SuchePage() {
         </p>
       </header>
 
-      <SearchBar onSearch={handleSearch} isLoading={isLoading} />
+      <SearchBar
+        onSearch={handleSearch}
+        isLoading={isLoading}
+        regionMode={regionMode}
+        onRegionModeChange={setRegionMode}
+      />
 
       <CustomVideoForm
         onSubmit={handleCustomVideoSubmit}
@@ -260,7 +314,7 @@ export default function SuchePage() {
             onChange={(category) => setFilters((f) => ({ ...f, category }))}
             counts={categoryCounts}
           />
-          <FilterBar filters={filters} onChange={setFilters} channels={channels} />
+          <FilterBar filters={filters} onChange={handleFiltersChange} channels={channels} />
         </div>
       ) : null}
 

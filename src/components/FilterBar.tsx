@@ -1,10 +1,14 @@
 import {
   DATE_RANGE_OPTIONS,
+  LANGUAGE_OPTIONS,
+  PERIOD_OPTIONS,
   SORT_OPTIONS,
   SUBSCRIBER_BUCKETS,
   VIEW_BUCKETS,
   type DateRangeFilter,
   type FilterState,
+  type LanguageFilter,
+  type PeriodFilter,
   type SortOption,
 } from "@/lib/filters";
 
@@ -36,6 +40,18 @@ export function FilterBar({
 
       <select
         className={selectClasses}
+        value={filters.period}
+        onChange={(e) => onChange({ ...filters, period: e.target.value as PeriodFilter })}
+      >
+        {PERIOD_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
+          </option>
+        ))}
+      </select>
+
+      <select
+        className={selectClasses}
         value={filters.channel}
         onChange={(e) => onChange({ ...filters, channel: e.target.value })}
       >
@@ -43,6 +59,18 @@ export function FilterBar({
         {channels.map((c) => (
           <option key={c} value={c}>
             {c}
+          </option>
+        ))}
+      </select>
+
+      <select
+        className={selectClasses}
+        value={filters.language}
+        onChange={(e) => onChange({ ...filters, language: e.target.value as LanguageFilter })}
+      >
+        {LANGUAGE_OPTIONS.map((o) => (
+          <option key={o.value} value={o.value}>
+            {o.label}
           </option>
         ))}
       </select>
