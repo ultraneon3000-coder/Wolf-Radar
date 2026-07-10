@@ -26,3 +26,16 @@ create table if not exists search_cache (
 );
 
 alter table search_cache enable row level security;
+
+-- Manuell überschriebenes Gesamturteil (siehe src/lib/cache.ts
+-- getUrteilOverrides/setUrteilOverride/removeUrteilOverride) — bewusst eine
+-- eigene Tabelle statt eines Felds in urteil_cache, damit Claudes Original-
+-- Urteil unangetastet bleibt und ein Zurücksetzen einfach "Zeile löschen" ist.
+create table if not exists urteil_override (
+  video_id text primary key,
+  gesamturteil text not null,
+  notiz text,
+  created_at timestamptz not null default now()
+);
+
+alter table urteil_override enable row level security;

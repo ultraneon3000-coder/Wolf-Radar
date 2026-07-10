@@ -6,8 +6,9 @@ import { formatCompactNumber, formatDate } from "@/lib/format";
 import { useChannels } from "@/lib/channels-context";
 import { useFavorites } from "@/lib/favorites-context";
 import { useSeen } from "@/lib/seen-context";
-import type { AnalyzedVideo } from "@/lib/types";
+import type { AnalyzedVideo, UrteilOverride } from "@/lib/types";
 import { JudgmentBadge } from "./JudgmentBadge";
+import { UrteilOverrideControl } from "./UrteilOverrideControl";
 import { ChannelAddIcon, ChannelCheckIcon, EyeIcon, EyeOffIcon, StarIcon } from "./icons";
 
 function categoryLabel(id: string): string {
@@ -16,6 +17,10 @@ function categoryLabel(id: string): string {
 
 export function ResultCard({ video }: { video: AnalyzedVideo }) {
   const [expanded, setExpanded] = useState(false);
+  // Lokal statt aus `video` direkt gelesen, damit Speichern/Zurücksetzen
+  // sofort sichtbar ist, ohne dass die Karte neu von der Such-API laden muss.
+  const [override, setOverride] = useState<UrteilOverride | undefined>(video.urteilOverride);
+  const displayVideo = { ...video, urteilOverride: override };
   const { isFavorite, toggleFavorite } = useFavorites();
   const favorite = isFavorite(video.videoId);
   const { isSeen, toggleSeen } = useSeen();
@@ -112,7 +117,7 @@ export function ResultCard({ video }: { video: AnalyzedVideo }) {
           >
             {video.title}
           </a>
-          <JudgmentBadge video={video} />
+          <JudgmentBadge video={displayVideo} />
         </div>
 
         <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted">
@@ -174,6 +179,11 @@ export function ResultCard({ video }: { video: AnalyzedVideo }) {
                 ) : null}
               </div>
             ) : null}
+
+            {override?.notiz ? (
+              <p className="text-xs italic text-muted">Notiz: {override.notiz}</p>
+            ) : null}
+            <UrteilOverrideControl videoId={video.videoId} override={override} onChange={setOverride} />
           </div>
         ) : video.status === "kein_transkript" ? (
           <p className="border-t border-line pt-3 text-sm text-muted">

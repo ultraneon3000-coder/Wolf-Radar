@@ -12,6 +12,7 @@ import {
   getCachedFailure,
   getCachedSearch,
   getCachedUrteil,
+  getUrteilOverrides,
   listChannels,
   setCachedFailure,
   setCachedSearch,
@@ -19,7 +20,7 @@ import {
 } from "@/lib/cache";
 import { DEMO_MODE, searchDemoVideos, type DemoVideo } from "@/lib/demo";
 import { SEARCH_CONFIG } from "@/lib/config";
-import type { AnalyzedVideo, AnalyzeEvent, RegionMode, VideoMeta } from "@/lib/types";
+import type { AnalyzedVideo, AnalyzeEvent, RegionMode, UrteilOverride, VideoMeta } from "@/lib/types";
 
 // Nutzt fs (Cache) und den Anthropic SDK-Client — braucht die Node.js-Runtime, kein Edge.
 export const runtime = "nodejs";
@@ -34,28 +35,29 @@ function sseLine(event: AnalyzeEvent): string {
 // YouTube-/TikTok-/Instagram-URL.
 async function processVideo(
   meta: VideoMeta,
-  transcriptUrl: string = `https://youtu.be/${meta.videoId}`
+  transcriptUrl: string = `https://youtu.be/${meta.videoId}`,
+  override?: UrteilOverride
 ): Promise<AnalyzedVideo> {
   const cachedUrteil = await getCachedUrteil(meta.videoId);
   if (cachedUrteil) {
-    return { ...meta, status: "ok", urteil: cachedUrteil };
+    return { ...meta, status: "ok", urteil: cachedUrteil, urteilOverride: override };
   }
 
   // Kurz gemerkter Fehlschlag (z.B. IP-Block) -> nicht sofort erneut bei YouTube anfragen.
   const cachedFailure = getCachedFailure(meta.videoId);
   if (cachedFailure) {
-    return { ...meta, status: cachedFailure.status, error: cachedFailure.message };
+    return { ...meta, status: cachedFailure.status, error: cachedFailure.message, urteilOverride: override };
   }
 
   try {
     const transcript = await getTranscriptText(transcriptUrl);
     const urteil = await analyzeTranscript(transcript);
     await setCachedUrteil(meta.videoId, urteil);
-    return { ...meta, status: "ok", urteil };
+    return { ...meta, status: "ok", urteil, urteilOverride: override };
   } catch (err) {
     if (err instanceof TranscriptUnavailableError) {
       setCachedFailure(meta.videoId, { status: "kein_transkript", message: err.message });
-      return { ...meta, status: "kein_transkript", error: err.message };
+      return { ...meta, status: "kein_transkript", error: err.message, urteilOverride: override };
     }
     const message =
       err instanceof TranscriptBlockedError
@@ -64,7 +66,7 @@ async function processVideo(
           ? err.message
           : "Unbekannter Fehler";
     setCachedFailure(meta.videoId, { status: "fehler", message });
-    return { ...meta, status: "fehler", error: message };
+    return { ...meta, status: "fehler", error: message, urteilOverride: override };
   }
 }
 
@@ -169,7 +171,8 @@ export async function GET(req: NextRequest) {
           }
 
           send({ type: "meta", total: 1 });
-          const result = await processVideo(meta, link.url);
+          const override = (await getUrteilOverrides([meta.videoId])).get(meta.videoId);
+          const result = await processVideo(meta, link.url, override);
           send({ type: "result", video: result });
           send({ type: "done" });
           return;
@@ -233,9 +236,10 @@ export async function GET(req: NextRequest) {
           const nextPageToken = nextOffset < matched.length ? String(nextOffset) : null;
 
           const videos = await fetchVideoMeta(pageEntries.map((e) => e.videoId));
+          const overrides = await getUrteilOverrides(videos.map((v) => v.videoId));
           send({ type: "meta", total: videos.length, nextPageToken });
           await processAll(videos.length, async (i) => {
-            const result = await processVideo(videos[i]);
+            const result = await processVideo(videos[i], undefined, overrides.get(videos[i].videoId));
             send({ type: "result", video: result });
           });
         } else {
@@ -254,9 +258,10 @@ export async function GET(req: NextRequest) {
           }
           const { videoIds, nextPageToken } = searchPage;
           const videos = await fetchVideoMeta(videoIds);
+          const overrides = await getUrteilOverrides(videos.map((v) => v.videoId));
           send({ type: "meta", total: videos.length, nextPageToken });
           await processAll(videos.length, async (i) => {
-            const result = await processVideo(videos[i]);
+            const result = await processVideo(videos[i], undefined, overrides.get(videos[i].videoId));
             send({ type: "result", video: result });
           });
         }

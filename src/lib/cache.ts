@@ -1,8 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
 import { FAILURE_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS } from "./config";
+import type { Judgment } from "./config";
 import { supabase } from "./supabase";
-import type { AnalyzedVideo, SavedChannel, Urteil, VideoStatus } from "./types";
+import type { AnalyzedVideo, SavedChannel, Urteil, UrteilOverride, VideoStatus } from "./types";
 
 // Einfacher Cache für den MVP: In-Memory (schnell, pro Server-Prozess) + eine
 // lokale JSON-Datei als Durchsatz über Neustarts hinweg. Reicht für den
@@ -123,6 +124,58 @@ export async function setCachedSearch(cacheKey: string, page: CachedSearchPage):
 
   if (error) {
     console.error(`Supabase-Suchcache-Schreiben fehlgeschlagen (${cacheKey}):`, error.message);
+  }
+}
+
+// Manuell überschriebenes Gesamturteil (Tabelle "urteil_override", siehe
+// supabase/schema.sql) — dauerhaft, keine TTL. getUrteilOverrides ist
+// gebündelt (ein .in()-Call für eine ganze Ergebnisseite) statt pro Video,
+// analog zu fetchChannelSubscribers in youtube.ts.
+export async function getUrteilOverrides(videoIds: string[]): Promise<Map<string, UrteilOverride>> {
+  const result = new Map<string, UrteilOverride>();
+  if (videoIds.length === 0) return result;
+
+  const { data, error } = await supabase
+    .from("urteil_override")
+    .select("video_id, gesamturteil, notiz, created_at")
+    .in("video_id", videoIds);
+
+  if (error) {
+    console.error("Supabase-Override-Lookup fehlgeschlagen:", error.message);
+    return result;
+  }
+  for (const row of data ?? []) {
+    result.set(row.video_id as string, {
+      gesamturteil: row.gesamturteil as Judgment,
+      notiz: (row.notiz as string | null) ?? null,
+      createdAt: row.created_at as string,
+    });
+  }
+  return result;
+}
+
+export async function setUrteilOverride(
+  videoId: string,
+  gesamturteil: Judgment,
+  notiz: string | null
+): Promise<void> {
+  const { error } = await supabase.from("urteil_override").upsert({
+    video_id: videoId,
+    gesamturteil,
+    notiz,
+    created_at: new Date().toISOString(),
+  });
+
+  if (error) {
+    console.error(`Supabase-Override-Schreiben fehlgeschlagen (${videoId}):`, error.message);
+  }
+}
+
+export async function removeUrteilOverride(videoId: string): Promise<void> {
+  const { error } = await supabase.from("urteil_override").delete().eq("video_id", videoId);
+
+  if (error) {
+    console.error(`Supabase-Override-Löschen fehlgeschlagen (${videoId}):`, error.message);
   }
 }
 

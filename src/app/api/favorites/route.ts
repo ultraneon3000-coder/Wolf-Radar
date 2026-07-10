@@ -1,12 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
-import { addFavorite, listFavorites, removeFavorite } from "@/lib/cache";
+import { addFavorite, getUrteilOverrides, listFavorites, removeFavorite } from "@/lib/cache";
 import type { AnalyzedVideo } from "@/lib/types";
 
 // Nutzt fs (Cache) — braucht die Node.js-Runtime, kein Edge.
 export const runtime = "nodejs";
 
 export async function GET() {
-  return NextResponse.json({ favorites: listFavorites() });
+  const favorites = listFavorites();
+  // Der gespeicherte Snapshot kann ein inzwischen überholtes Urteil enthalten
+  // (Override erst nach dem Speichern gesetzt) — deshalb hier frisch überlagern.
+  const overrides = await getUrteilOverrides(favorites.map((v) => v.videoId));
+  return NextResponse.json({
+    favorites: favorites.map((v) => ({ ...v, urteilOverride: overrides.get(v.videoId) })),
+  });
 }
 
 export async function POST(req: NextRequest) {

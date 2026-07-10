@@ -1,6 +1,6 @@
 import type { Judgment } from "./config";
 import { daysSince } from "./format";
-import type { AnalyzedVideo } from "./types";
+import { effectiveJudgment, type AnalyzedVideo } from "./types";
 
 export type DateRangeFilter = "alle" | "7" | "21" | "30" | "90";
 export type LanguageFilter = "alle" | "de" | "en";
@@ -142,8 +142,12 @@ export function filterAndSortVideos(
         return new Date(a.publishedAt).getTime() - new Date(b.publishedAt).getTime();
       case "fragwuerdig_views":
       default: {
-        const rankA = a.urteil ? JUDGMENT_RANK[a.urteil.gesamturteil] : 3;
-        const rankB = b.urteil ? JUDGMENT_RANK[b.urteil.gesamturteil] : 3;
+        // Sortierung folgt dem angezeigten Urteil (Override falls gesetzt,
+        // sonst Claudes Original) — siehe effectiveJudgment in types.ts.
+        const judgmentA = effectiveJudgment(a);
+        const judgmentB = effectiveJudgment(b);
+        const rankA = judgmentA ? JUDGMENT_RANK[judgmentA] : 3;
+        const rankB = judgmentB ? JUDGMENT_RANK[judgmentB] : 3;
         if (rankA !== rankB) return rankA - rankB;
         return b.viewCount - a.viewCount;
       }

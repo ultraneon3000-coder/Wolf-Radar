@@ -67,10 +67,26 @@ export interface ChannelCandidate extends SavedChannel {
 
 export type VideoStatus = "ok" | "kein_transkript" | "fehler";
 
+// Von Christian manuell gesetztes Gesamturteil (siehe cache.ts
+// getUrteilOverrides/setUrteilOverride) — überschreibt nur die ANZEIGE des
+// Gesamturteils, Claudes Original bleibt in `urteil` unverändert erhalten
+// und wird beim Zurücksetzen wieder sichtbar.
+export interface UrteilOverride {
+  gesamturteil: Judgment;
+  notiz: string | null;
+  createdAt: string;
+}
+
 export interface AnalyzedVideo extends VideoMeta {
   status: VideoStatus;
   urteil?: Urteil;
   error?: string;
+  urteilOverride?: UrteilOverride;
+}
+
+/** Das tatsächlich anzuzeigende Gesamturteil — Override hat Vorrang vor Claudes Original. */
+export function effectiveJudgment(video: AnalyzedVideo): Judgment | undefined {
+  return video.urteilOverride?.gesamturteil ?? video.urteil?.gesamturteil;
 }
 
 // Events, die die /api/analyze Route per Server-Sent Events streamt.
