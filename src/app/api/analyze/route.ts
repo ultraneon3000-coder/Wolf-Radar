@@ -320,6 +320,7 @@ export async function GET(req: NextRequest) {
 
           const pageEntries = filtered.slice(offset, offset + SEARCH_CONFIG.pageSize);
           const nextOffset = offset + SEARCH_CONFIG.pageSize;
+          const depthLimitReached = depth >= SEARCH_CONFIG.channelsMaxDepth && !allExhausted;
           const nextPageToken =
             nextOffset < filtered.length
               ? `${depth}:${nextOffset}`
@@ -329,7 +330,7 @@ export async function GET(req: NextRequest) {
 
           const videos = await fetchVideoMeta(pageEntries.map((e) => e.videoId));
           const overrides = await getUrteilOverrides(videos.map((v) => v.videoId));
-          send({ type: "meta", total: videos.length, nextPageToken });
+          send({ type: "meta", total: videos.length, nextPageToken, channelsDepthLimited: depthLimitReached });
           await processAll(videos.length, async (i) => {
             const result = await processVideo(videos[i], undefined, overrides.get(videos[i].videoId));
             send({ type: "result", video: result });

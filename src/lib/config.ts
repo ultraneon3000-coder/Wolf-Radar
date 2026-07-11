@@ -61,7 +61,14 @@ export const SEARCH_CONFIG = {
   // Playlist-Seiten (à 50 Videos, 1 Quota-Einheit je Seite) werden pro Kanal
   // und Anfrage nachgeladen, wenn der Stichwort-Filter viele Treffer
   // ausschließt (siehe api/analyze/route.ts fetchChannelUploadsUpToDepth).
-  channelsMaxDepth: 10,
+  // 40 Seiten = 2000 Videos/Kanal — selbst bei 5 gespeicherten Kanälen im
+  // Worst Case 200 Quota-Einheiten (playlistItems.list kostet nur 1 Einheit/
+  // Seite), unproblematisch beim 10.000er-Tageslimit. Höher gesetzt als
+  // ursprünglich (10 = 500 Videos), weil das bei sehr postfreudigen Kanälen
+  // (z.B. fast täglich Shorts) schon nach wenigen Monaten griff und ältere,
+  // thematisch passende Videos verdeckte, die die normale YouTube-Suche
+  // (durchsucht den kompletten Kanal-Bestand server-seitig) sehr wohl fand.
+  channelsMaxDepth: 40,
 };
 
 export const ANALYSIS_CONFIG = {

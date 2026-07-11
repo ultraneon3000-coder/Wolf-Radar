@@ -73,6 +73,11 @@ export default function SuchePage() {
   const [customError, setCustomError] = useState<string | null>(null);
   // undefined = noch nicht gesucht, null = keine weitere Seite mehr, sonst YouTube-Token.
   const [nextPageToken, setNextPageToken] = useState<string | null | undefined>(undefined);
+  // true, wenn im "Nur meine Kanäle"-Modus SEARCH_CONFIG.channelsMaxDepth
+  // erreicht wurde, bevor mindestens ein Kanal wirklich erschöpft war — die
+  // Suche deckt dann nicht den gesamten Video-Bestand aller Kanäle ab (siehe
+  // api/analyze/route.ts, AnalyzeEvent.channelsDepthLimited).
+  const [channelsDepthLimited, setChannelsDepthLimited] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [loadMoreError, setLoadMoreError] = useState<string | null>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
@@ -139,6 +144,7 @@ export default function SuchePage() {
     setErrorMessage(null);
     setStatus("loading");
     setNextPageToken(undefined);
+    setChannelsDepthLimited(false);
     setIsLoadingMore(false);
     setLoadMoreError(null);
 
@@ -151,6 +157,7 @@ export default function SuchePage() {
         case "meta":
           setBatchTotal(parsed.total);
           setNextPageToken(parsed.nextPageToken ?? null);
+          setChannelsDepthLimited(parsed.channelsDepthLimited ?? false);
           break;
         case "result":
           setVideos((prev) => appendVideoDeduped(prev, parsed.video));
@@ -220,6 +227,7 @@ export default function SuchePage() {
         case "meta":
           setBatchTotal(parsed.total);
           setNextPageToken(parsed.nextPageToken ?? null);
+          setChannelsDepthLimited(parsed.channelsDepthLimited ?? false);
           break;
         case "result":
           setVideos((prev) => appendVideoDeduped(prev, parsed.video));
@@ -314,6 +322,13 @@ export default function SuchePage() {
       {status === "error" && errorMessage ? (
         <div className="mx-auto w-full max-w-2xl rounded-lg border border-bad/30 bg-bad/10 px-4 py-3 text-sm text-bad">
           {errorMessage}
+        </div>
+      ) : null}
+
+      {channelsOnly && channelsDepthLimited ? (
+        <div className="mx-auto w-full max-w-2xl rounded-lg border border-warn/30 bg-warn/10 px-4 py-3 text-sm text-warn">
+          Suchtiefe erreicht — ältere Videos aus mindestens einem deiner Kanäle wurden nicht
+          durchsucht. Nutze bei Bedarf den Zeitraum-Filter oder engere Suchbegriffe.
         </div>
       ) : null}
 

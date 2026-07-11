@@ -102,8 +102,12 @@ export function effectiveJudgment(video: AnalyzedVideo): Judgment | undefined {
 }
 
 // Events, die die /api/analyze Route per Server-Sent Events streamt.
+// channelsDepthLimited (nur im "Nur meine Kanäle"-Modus relevant): true, wenn
+// SEARCH_CONFIG.channelsMaxDepth erreicht wurde, bevor mindestens ein Kanal
+// wirklich erschöpft war — die Suche deckt dann nicht den gesamten
+// Video-Bestand aller gespeicherten Kanäle ab (siehe api/analyze/route.ts).
 export type AnalyzeEvent =
-  | { type: "meta"; total: number; nextPageToken?: string | null }
+  | { type: "meta"; total: number; nextPageToken?: string | null; channelsDepthLimited?: boolean }
   | { type: "result"; video: AnalyzedVideo }
   | { type: "done" }
   | { type: "error"; message: string };
