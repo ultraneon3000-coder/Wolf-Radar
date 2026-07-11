@@ -1,5 +1,5 @@
 import { detectLanguageFromText, normalizeLanguage } from "./language";
-import type { ChannelCandidate, RegionMode, VideoMeta } from "./types";
+import type { ChannelCandidate, PlaylistVideoEntry, RegionMode, VideoMeta } from "./types";
 
 const API_BASE = "https://www.googleapis.com/youtube/v3";
 
@@ -119,6 +119,69 @@ export async function searchVideoIds(
     .map((item) => item.id?.videoId)
     .filter((id): id is string => Boolean(id));
   return { videoIds: [...new Set(ids)], nextPageToken: data.nextPageToken ?? null };
+}
+
+interface YoutubePlaylistItem {
+  snippet?: {
+    title?: string;
+    description?: string;
+    publishedAt?: string;
+    resourceId?: { videoId?: string };
+  };
+  contentDetails?: { videoId?: string; videoPublishedAt?: string };
+}
+
+export interface PlaylistPage {
+  entries: PlaylistVideoEntry[];
+  nextPageToken: string | null;
+}
+
+/** Leitet die Uploads-Playlist-ID eines Kanals aus dessen Kanal-ID ab ("UC…" -> "UU…"). */
+function uploadsPlaylistId(channelId: string): string {
+  return channelId.startsWith("UC") ? `UU${channelId.slice(2)}` : channelId;
+}
+
+/**
+ * playlistItems.list auf die Uploads-Playlist eines Kanals -> bis zu 50
+ * Videos pro Aufruf (1 Quota-Einheit statt 100 bei search.list), mit
+ * Paginierung über nextPageToken für tiefere Seiten. Ersetzt den früheren
+ * RSS-Feed-Abruf (lib/rss.ts) im "Nur meine Kanäle"-Modus (siehe
+ * api/analyze/route.ts) — liefert wie RSS noch keine Statistiken/Dauer,
+ * dafür wird weiterhin zusätzlich fetchVideoMeta aufgerufen. Liefert bei
+ * Netzwerk-/API-Fehlern eine leere Seite statt zu werfen, damit ein
+ * einzelner defekter Kanal nicht die ganze Suche abbricht.
+ */
+export async function fetchUploadsPlaylistPage(
+  channelId: string,
+  pageToken?: string
+): Promise<PlaylistPage> {
+  const url = new URL(`${API_BASE}/playlistItems`);
+  url.searchParams.set("part", "snippet,contentDetails");
+  url.searchParams.set("playlistId", uploadsPlaylistId(channelId));
+  url.searchParams.set("maxResults", "50");
+  url.searchParams.set("key", getApiKey());
+  if (pageToken) url.searchParams.set("pageToken", pageToken);
+
+  try {
+    const data = await getJson<{ items?: YoutubePlaylistItem[]; nextPageToken?: string }>(url);
+    const entries: PlaylistVideoEntry[] = [];
+    for (const item of data.items ?? []) {
+      const videoId = item.contentDetails?.videoId ?? item.snippet?.resourceId?.videoId;
+      const publishedAt = item.contentDetails?.videoPublishedAt ?? item.snippet?.publishedAt;
+      if (!videoId || !publishedAt) continue;
+      entries.push({
+        videoId,
+        channelId,
+        title: item.snippet?.title ?? "",
+        description: item.snippet?.description ?? "",
+        publishedAt,
+      });
+    }
+    return { entries, nextPageToken: data.nextPageToken ?? null };
+  } catch (err) {
+    console.error(`Uploads-Playlist für Kanal ${channelId} konnte nicht gelesen werden:`, err);
+    return { entries: [], nextPageToken: null };
+  }
 }
 
 /** channels.list -> Abonnentenzahl pro Kanal (Filter-Datum "Kanalgröße"). */

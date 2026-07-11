@@ -57,6 +57,11 @@ export const SEARCH_CONFIG = {
   pageSize: 10,
   // Wie viele Videos gleichzeitig (Transkript + Analyse) verarbeitet werden.
   concurrency: 4,
+  // Sicherheitsgrenze für "Nur meine Kanäle": maximal so viele
+  // Playlist-Seiten (à 50 Videos, 1 Quota-Einheit je Seite) werden pro Kanal
+  // und Anfrage nachgeladen, wenn der Stichwort-Filter viele Treffer
+  // ausschließt (siehe api/analyze/route.ts fetchChannelUploadsUpToDepth).
+  channelsMaxDepth: 10,
 };
 
 export const ANALYSIS_CONFIG = {

@@ -1,6 +1,5 @@
 import { NextRequest } from "next/server";
-import { searchVideoIds, fetchVideoMeta } from "@/lib/youtube";
-import { fetchChannelFeed } from "@/lib/rss";
+import { fetchUploadsPlaylistPage, searchVideoIds, fetchVideoMeta } from "@/lib/youtube";
 import { buildExternalVideoMeta, detectVideoLink } from "@/lib/links";
 import {
   getTranscriptText,
@@ -9,18 +8,27 @@ import {
 } from "@/lib/transcript";
 import { analyzeTranscript } from "@/lib/analyze";
 import {
+  getCachedChannelPage,
   getCachedFailure,
   getCachedSearch,
   getCachedUrteil,
   getUrteilOverrides,
   listChannels,
+  setCachedChannelPage,
   setCachedFailure,
   setCachedSearch,
   setCachedUrteil,
 } from "@/lib/cache";
 import { DEMO_MODE, searchDemoVideos, type DemoVideo } from "@/lib/demo";
 import { SEARCH_CONFIG } from "@/lib/config";
-import type { AnalyzedVideo, AnalyzeEvent, RegionMode, UrteilOverride, VideoMeta } from "@/lib/types";
+import type {
+  AnalyzedVideo,
+  AnalyzeEvent,
+  PlaylistVideoEntry,
+  RegionMode,
+  UrteilOverride,
+  VideoMeta,
+} from "@/lib/types";
 
 // Nutzt fs (Cache) und den Anthropic SDK-Client — braucht die Node.js-Runtime, kein Edge.
 export const runtime = "nodejs";
@@ -96,6 +104,75 @@ function buildSearchCacheKey(
   pageToken: string | undefined
 ): string {
   return [q, region, order, publishedAfter ?? "", pageToken ?? ""].join("::");
+}
+
+// Cache-Key für eine einzelne Uploads-Playlist-Seite eines Kanals (siehe
+// cache.ts getCachedChannelPage/setCachedChannelPage) — unabhängig vom
+// Suchbegriff, da die Stichwort-Filterung erst nach dem Laden lokal passiert.
+function channelPageCacheKey(channelId: string, pageToken: string | undefined): string {
+  return `channelsOnly::${channelId}::${pageToken ?? "p1"}`;
+}
+
+// Lädt Seiten 1..depth der Uploads-Playlist eines Kanals (playlistItems.list,
+// siehe lib/youtube.ts fetchUploadsPlaylistPage), verkettet über den
+// YouTube-nextPageToken. Bereits geholte Seiten kommen aus dem Cache (0
+// Quota-Einheiten), nur eine neu hinzukommende Tiefenstufe kostet 1 Einheit.
+async function fetchChannelUploadsUpToDepth(
+  channelId: string,
+  depth: number
+): Promise<{ entries: PlaylistVideoEntry[]; exhausted: boolean }> {
+  let token: string | undefined;
+  const entries: PlaylistVideoEntry[] = [];
+  let exhausted = false;
+  for (let page = 1; page <= depth; page++) {
+    const cacheKey = channelPageCacheKey(channelId, token);
+    let result = await getCachedChannelPage(cacheKey);
+    if (!result) {
+      result = await fetchUploadsPlaylistPage(channelId, token);
+      await setCachedChannelPage(cacheKey, result);
+    }
+    entries.push(...result.entries);
+    if (!result.nextPageToken) {
+      exhausted = true;
+      break;
+    }
+    token = result.nextPageToken;
+  }
+  return { entries, exhausted };
+}
+
+// Stichwort- und Zeitraum-Filter + Sortierung für die "Nur meine Kanäle"-
+// Treffer, lokal auf den bereits geholten Playlist-Einträgen (kein
+// search.list nötig).
+function filterAndSortChannelEntries(
+  entries: PlaylistVideoEntry[],
+  qLower: string | undefined,
+  publishedAfterMs: number | undefined
+): PlaylistVideoEntry[] {
+  return entries
+    .filter((e) => {
+      if (qLower && !`${e.title} ${e.description}`.toLowerCase().includes(qLower)) {
+        return false;
+      }
+      if (publishedAfterMs !== undefined && new Date(e.publishedAt).getTime() < publishedAfterMs) {
+        return false;
+      }
+      return true;
+    })
+    .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+}
+
+// pageToken im "Nur meine Kanäle"-Modus ist kein YouTube-Token, sondern
+// "<depth>:<offset>" — depth = wie viele Playlist-Seiten pro Kanal
+// mindestens geladen sind, offset = Position im gefilterten, sortierten
+// Gesamtpool aller Kanäle.
+function parseChannelsPageToken(pageToken: string | undefined): { depth: number; offset: number } {
+  if (!pageToken) return { depth: 1, offset: 0 };
+  const [depthStr, offsetStr] = pageToken.split(":");
+  return {
+    depth: Math.max(1, Number(depthStr) || 1),
+    offset: Math.max(0, Number(offsetStr) || 0),
+  };
 }
 
 // Verarbeitet `count` Elemente mit begrenzter Nebenläufigkeit (siehe
@@ -189,14 +266,15 @@ export async function GET(req: NextRequest) {
           });
         } else if (channelsOnly) {
           // "Nur meine Kanäle": statt einer search.list-Anfrage pro
-          // gespeichertem Kanal (100 Quota-Einheiten × Kanalzahl) werden die
-          // öffentlichen RSS-Feeds aller Kanäle gelesen (0 Quota, siehe
-          // lib/rss.ts) und zusammengeführt. RSS liefert nur die ~15
-          // neuesten Videos pro Kanal, keine Relevanz-Sortierung und keine
+          // gespeichertem Kanal (100 Quota-Einheiten × Kanalzahl) wird pro
+          // Kanal die Uploads-Playlist über playlistItems.list gelesen (1
+          // Quota-Einheit pro Seite à 50 Videos, siehe youtube.ts
+          // fetchUploadsPlaylistPage) und zusammengeführt. Wie beim früheren
+          // RSS-Ansatz gibt es keine Relevanz-Sortierung und keine
           // Region-Einschränkung — region/order sind in diesem Modus daher
           // ohne Wirkung, es wird immer nach Datum sortiert. Der Suchbegriff
           // (q) wird nicht an YouTube geschickt, sondern hier gegen
-          // Titel/Beschreibung der RSS-Treffer gefiltert.
+          // Titel/Beschreibung der Playlist-Treffer gefiltert.
           const savedChannels = listChannels();
           if (savedChannels.length === 0) {
             send({
@@ -206,34 +284,43 @@ export async function GET(req: NextRequest) {
             return;
           }
 
-          const feeds = await Promise.all(
-            savedChannels.map((channel) => fetchChannelFeed(channel.channelId))
-          );
-          // Map statt Set-auf-Array, da eine Video-ID zwar strukturell nur zu
-          // einem Kanal gehören kann, ein einzelner Feed aber theoretisch
-          // doppelte Einträge liefern könnte.
-          const allEntries = [...new Map(feeds.flat().map((e) => [e.videoId, e])).values()];
-
           const qLower = q?.toLowerCase();
           const publishedAfterMs = publishedAfter ? new Date(publishedAfter).getTime() : undefined;
-          const matched = allEntries
-            .filter((e) => {
-              if (qLower && !`${e.title} ${e.description}`.toLowerCase().includes(qLower)) {
-                return false;
-              }
-              if (publishedAfterMs !== undefined && new Date(e.publishedAt).getTime() < publishedAfterMs) {
-                return false;
-              }
-              return true;
-            })
-            .sort((a, b) => new Date(b.publishedAt).getTime() - new Date(a.publishedAt).getTime());
+          const { depth: startDepth, offset } = parseChannelsPageToken(pageToken);
 
-          // Einfacher Offset statt YouTube-nextPageToken — die komplette,
-          // gefilterte Liste liegt bereits vor (RSS kennt keine Seiten).
-          const offset = pageToken ? Number(pageToken) || 0 : 0;
-          const pageEntries = matched.slice(offset, offset + SEARCH_CONFIG.pageSize);
+          // Lädt so lange weitere Playlist-Seiten pro Kanal nach (jeweils +1
+          // Quota-Einheit pro Kanal), bis der gefilterte Pool die
+          // angeforderte Seite füllt oder alle Kanäle erschöpft sind —
+          // begrenzt durch SEARCH_CONFIG.channelsMaxDepth als Sicherheitsnetz
+          // gegen sehr enge Stichwort-Filter.
+          let depth = startDepth;
+          let filtered: PlaylistVideoEntry[] = [];
+          let allExhausted = false;
+          for (;;) {
+            const perChannel = await Promise.all(
+              savedChannels.map((channel) => fetchChannelUploadsUpToDepth(channel.channelId, depth))
+            );
+            // Map statt Set-auf-Array, da eine Video-ID zwar strukturell nur
+            // zu einem Kanal gehören kann, doppelte Playlist-Einträge aber
+            // theoretisch möglich sind.
+            const allEntries = [
+              ...new Map(perChannel.flatMap((r) => r.entries).map((e) => [e.videoId, e])).values(),
+            ];
+            filtered = filterAndSortChannelEntries(allEntries, qLower, publishedAfterMs);
+            allExhausted = perChannel.every((r) => r.exhausted);
+            if (filtered.length >= offset + SEARCH_CONFIG.pageSize || allExhausted) break;
+            if (depth >= SEARCH_CONFIG.channelsMaxDepth) break;
+            depth++;
+          }
+
+          const pageEntries = filtered.slice(offset, offset + SEARCH_CONFIG.pageSize);
           const nextOffset = offset + SEARCH_CONFIG.pageSize;
-          const nextPageToken = nextOffset < matched.length ? String(nextOffset) : null;
+          const nextPageToken =
+            nextOffset < filtered.length
+              ? `${depth}:${nextOffset}`
+              : allExhausted || depth >= SEARCH_CONFIG.channelsMaxDepth
+                ? null
+                : `${depth + 1}:${nextOffset}`;
 
           const videos = await fetchVideoMeta(pageEntries.map((e) => e.videoId));
           const overrides = await getUrteilOverrides(videos.map((v) => v.videoId));

@@ -57,6 +57,18 @@ export interface SavedChannel {
   thumbnail: string;
 }
 
+// Ein Video-Eintrag aus der Uploads-Playlist eines Kanals (siehe
+// lib/youtube.ts fetchUploadsPlaylistPage) — vor dem Anreichern mit
+// vollständigen Metadaten (Aufrufe/Dauer/Sprache) per fetchVideoMeta, für
+// den "Nur meine Kanäle"-Suchmodus (siehe api/analyze/route.ts).
+export interface PlaylistVideoEntry {
+  videoId: string;
+  channelId: string;
+  title: string;
+  description: string;
+  publishedAt: string;
+}
+
 // Ein Treffer aus der Kanal-Suche (siehe lib/youtube.ts searchChannels) —
 // noch nicht gespeichert, der Nutzer wählt gezielt einen Kandidaten aus.
 // subscriberCount ist null, wenn der Kanal die Abo-Zahl verbirgt oder sie

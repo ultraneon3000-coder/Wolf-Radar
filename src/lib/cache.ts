@@ -3,7 +3,14 @@ import path from "node:path";
 import { FAILURE_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS } from "./config";
 import type { Judgment } from "./config";
 import { supabase } from "./supabase";
-import type { AnalyzedVideo, SavedChannel, Urteil, UrteilOverride, VideoStatus } from "./types";
+import type {
+  AnalyzedVideo,
+  PlaylistVideoEntry,
+  SavedChannel,
+  Urteil,
+  UrteilOverride,
+  VideoStatus,
+} from "./types";
 
 // Einfacher Cache für den MVP: In-Memory (schnell, pro Server-Prozess) + eine
 // lokale JSON-Datei als Durchsatz über Neustarts hinweg. Reicht für den
@@ -124,6 +131,52 @@ export async function setCachedSearch(cacheKey: string, page: CachedSearchPage):
 
   if (error) {
     console.error(`Supabase-Suchcache-Schreiben fehlgeschlagen (${cacheKey}):`, error.message);
+  }
+}
+
+// Cache für einzelne Uploads-Playlist-Seiten (playlistItems.list, siehe
+// lib/youtube.ts fetchUploadsPlaylistPage) im "Nur meine Kanäle"-Modus —
+// nutzt dieselbe Tabelle "search_cache" wie getCachedSearch/setCachedSearch
+// (gleiche TTL SEARCH_CACHE_TTL_MS), aber mit einem Cache-Key pro Kanal +
+// Playlist-Seite statt pro Suchanfrage: die 1 Quota-Einheit einer Seite wird
+// so über verschiedene Stichwort-Suchen und "Mehr laden"-Klicks hinweg
+// wiederverwendet, da die Stichwort-Filterung erst danach lokal passiert.
+export interface CachedChannelPage {
+  entries: PlaylistVideoEntry[];
+  nextPageToken: string | null;
+}
+
+export async function getCachedChannelPage(cacheKey: string): Promise<CachedChannelPage | undefined> {
+  const { data, error } = await supabase
+    .from("search_cache")
+    .select("video_ids, next_page_token, created_at")
+    .eq("cache_key", cacheKey)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`Supabase-Kanalseiten-Cache-Lookup fehlgeschlagen (${cacheKey}):`, error.message);
+    return undefined;
+  }
+  if (!data) return undefined;
+  if (Date.now() - new Date(data.created_at as string).getTime() > SEARCH_CACHE_TTL_MS) {
+    return undefined;
+  }
+  return {
+    entries: data.video_ids as unknown as PlaylistVideoEntry[],
+    nextPageToken: (data.next_page_token as string | null) ?? null,
+  };
+}
+
+export async function setCachedChannelPage(cacheKey: string, page: CachedChannelPage): Promise<void> {
+  const { error } = await supabase.from("search_cache").upsert({
+    cache_key: cacheKey,
+    video_ids: page.entries,
+    next_page_token: page.nextPageToken,
+    created_at: new Date().toISOString(),
+  });
+
+  if (error) {
+    console.error(`Supabase-Kanalseiten-Cache-Schreiben fehlgeschlagen (${cacheKey}):`, error.message);
   }
 }
 
