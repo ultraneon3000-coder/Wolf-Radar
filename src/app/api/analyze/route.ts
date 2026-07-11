@@ -143,7 +143,12 @@ async function fetchChannelUploadsUpToDepth(
 
 // Stichwort- und Zeitraum-Filter + Sortierung für die "Nur meine Kanäle"-
 // Treffer, lokal auf den bereits geholten Playlist-Einträgen (kein
-// search.list nötig).
+// search.list nötig). Der Suchbegriff muss im TITEL vorkommen — die
+// Beschreibung wird bewusst NICHT mehr durchsucht, da Kanäle oft einen
+// wiederkehrenden Beschreibungs-Boilerplate (Bio/Links/Hashtags) verwenden,
+// der sonst thematisch völlig unpassende Videos matchen ließ. Einfaches
+// Substring-Matching (statt strikter \b-Wortgrenzen) ist hier gewollt, damit
+// z.B. "gesund" auch "Gesundheit" und "ungesund" im Titel findet.
 function filterAndSortChannelEntries(
   entries: PlaylistVideoEntry[],
   qLower: string | undefined,
@@ -151,7 +156,7 @@ function filterAndSortChannelEntries(
 ): PlaylistVideoEntry[] {
   return entries
     .filter((e) => {
-      if (qLower && !`${e.title} ${e.description}`.toLowerCase().includes(qLower)) {
+      if (qLower && !e.title.toLowerCase().includes(qLower)) {
         return false;
       }
       if (publishedAfterMs !== undefined && new Date(e.publishedAt).getTime() < publishedAfterMs) {
