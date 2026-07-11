@@ -280,7 +280,7 @@ export async function GET(req: NextRequest) {
           // ohne Wirkung, es wird immer nach Datum sortiert. Der Suchbegriff
           // (q) wird nicht an YouTube geschickt, sondern hier gegen
           // Titel/Beschreibung der Playlist-Treffer gefiltert.
-          const savedChannels = listChannels();
+          const savedChannels = await listChannels();
           if (savedChannels.length === 0) {
             send({
               type: "error",

@@ -1,5 +1,3 @@
-import fs from "node:fs";
-import path from "node:path";
 import { FAILURE_CACHE_TTL_MS, SEARCH_CACHE_TTL_MS } from "./config";
 import type { Judgment } from "./config";
 import { supabase } from "./supabase";
@@ -11,55 +9,6 @@ import type {
   UrteilOverride,
   VideoStatus,
 } from "./types";
-
-// Einfacher Cache für den MVP: In-Memory (schnell, pro Server-Prozess) + eine
-// lokale JSON-Datei als Durchsatz über Neustarts hinweg. Reicht für den
-// lokalen Betrieb; für Mehrbenutzer-/Produktivbetrieb durch SQLite/Redis ersetzen.
-
-function createJsonFileStore<T>(filename: string) {
-  const filePath = path.join(process.cwd(), ".cache", filename);
-  let memory: Record<string, T> | null = null;
-
-  function ensureLoaded(): Record<string, T> {
-    if (!memory) {
-      try {
-        memory = JSON.parse(fs.readFileSync(filePath, "utf-8")) as Record<string, T>;
-      } catch {
-        memory = {};
-      }
-    }
-    return memory;
-  }
-
-  function persist(): void {
-    try {
-      fs.mkdirSync(path.dirname(filePath), { recursive: true });
-      fs.writeFileSync(filePath, JSON.stringify(ensureLoaded(), null, 2), "utf-8");
-    } catch (err) {
-      console.error(`Cache (${filename}) konnte nicht auf Disk gespeichert werden:`, err);
-    }
-  }
-
-  return {
-    get(key: string): T | undefined {
-      return ensureLoaded()[key];
-    },
-    set(key: string, value: T): void {
-      ensureLoaded()[key] = value;
-      persist();
-    },
-    delete(key: string): void {
-      delete ensureLoaded()[key];
-      persist();
-    },
-    values(): T[] {
-      return Object.values(ensureLoaded());
-    },
-    has(key: string): boolean {
-      return key in ensureLoaded();
-    },
-  };
-}
 
 // Persistenter Urteil-Cache in Supabase (Tabelle "urteil_cache", siehe
 // supabase/schema.sql) statt lokaler JSON-Datei — Vercel hat kein
@@ -265,63 +214,152 @@ export function setCachedFailure(videoId: string, failure: CachedFailure): void 
 
 // Favoriten: von Wolf angesternte Videos, als vollständiger Snapshot gespeichert
 // (Titel/Thumbnail/Urteil etc.), damit die Favoriten-Ansicht ohne erneute
-// Analyse angezeigt werden kann.
-const favoritesStore = createJsonFileStore<AnalyzedVideo>("favoriten.json");
+// Analyse angezeigt werden kann. Persistent in Supabase (Tabelle "favorites",
+// siehe supabase/schema.sql) statt lokaler JSON-Datei — Vercel hat kein
+// persistentes Dateisystem, ein anderer/kalter Lambda-Prozess würde eine
+// lokale Datei sonst nie zu Gesicht bekommen.
+export async function listFavorites(): Promise<AnalyzedVideo[]> {
+  const { data, error } = await supabase
+    .from("favorites")
+    .select("video")
+    .order("created_at", { ascending: true });
 
-export function listFavorites(): AnalyzedVideo[] {
-  return favoritesStore.values();
+  if (error) {
+    console.error("Supabase-Favoriten-Lookup fehlgeschlagen:", error.message);
+    return [];
+  }
+  return (data ?? []).map((row) => row.video as AnalyzedVideo);
 }
 
-export function isFavorite(videoId: string): boolean {
-  return favoritesStore.has(videoId);
+export async function isFavorite(videoId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("favorites")
+    .select("video_id")
+    .eq("video_id", videoId)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`Supabase-Favoriten-Lookup fehlgeschlagen (${videoId}):`, error.message);
+    return false;
+  }
+  return data !== null;
 }
 
-export function addFavorite(video: AnalyzedVideo): void {
-  favoritesStore.set(video.videoId, video);
+export async function addFavorite(video: AnalyzedVideo): Promise<void> {
+  const { error } = await supabase
+    .from("favorites")
+    .upsert({ video_id: video.videoId, video });
+
+  if (error) {
+    console.error(`Supabase-Favoriten-Schreiben fehlgeschlagen (${video.videoId}):`, error.message);
+  }
 }
 
-export function removeFavorite(videoId: string): void {
-  favoritesStore.delete(videoId);
+export async function removeFavorite(videoId: string): Promise<void> {
+  const { error } = await supabase.from("favorites").delete().eq("video_id", videoId);
+
+  if (error) {
+    console.error(`Supabase-Favoriten-Löschen fehlgeschlagen (${videoId}):`, error.message);
+  }
 }
 
 // "Schon gesehen": Videos, die Wolf per Augen-Icon aus den normalen Listen
 // (Suche, Vorgeschlagen) ausgeblendet hat. Gleicher Persistenz-Mechanismus
-// wie Favoriten — vollständiger Snapshot, damit die "Schon gesehen"-Ansicht
-// ohne erneute Analyse angezeigt werden kann.
-const seenStore = createJsonFileStore<AnalyzedVideo>("gesehen.json");
+// wie Favoriten (Tabelle "seen") — vollständiger Snapshot, damit die "Schon
+// gesehen"-Ansicht ohne erneute Analyse angezeigt werden kann.
+export async function listSeen(): Promise<AnalyzedVideo[]> {
+  const { data, error } = await supabase
+    .from("seen")
+    .select("video")
+    .order("created_at", { ascending: true });
 
-export function listSeen(): AnalyzedVideo[] {
-  return seenStore.values();
+  if (error) {
+    console.error("Supabase-Gesehen-Lookup fehlgeschlagen:", error.message);
+    return [];
+  }
+  return (data ?? []).map((row) => row.video as AnalyzedVideo);
 }
 
-export function isSeen(videoId: string): boolean {
-  return seenStore.has(videoId);
+export async function isSeen(videoId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("seen")
+    .select("video_id")
+    .eq("video_id", videoId)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`Supabase-Gesehen-Lookup fehlgeschlagen (${videoId}):`, error.message);
+    return false;
+  }
+  return data !== null;
 }
 
-export function addSeen(video: AnalyzedVideo): void {
-  seenStore.set(video.videoId, video);
+export async function addSeen(video: AnalyzedVideo): Promise<void> {
+  const { error } = await supabase.from("seen").upsert({ video_id: video.videoId, video });
+
+  if (error) {
+    console.error(`Supabase-Gesehen-Schreiben fehlgeschlagen (${video.videoId}):`, error.message);
+  }
 }
 
-export function removeSeen(videoId: string): void {
-  seenStore.delete(videoId);
+export async function removeSeen(videoId: string): Promise<void> {
+  const { error } = await supabase.from("seen").delete().eq("video_id", videoId);
+
+  if (error) {
+    console.error(`Supabase-Gesehen-Löschen fehlgeschlagen (${videoId}):`, error.message);
+  }
 }
 
 // Von Wolf gespeicherte Kanäle für den "Nur meine Kanäle"-Suchmodus (siehe
-// api/channels/route.ts). Gleicher Persistenz-Mechanismus wie Favoriten/Gesehen.
-const channelsStore = createJsonFileStore<SavedChannel>("kanaele.json");
+// api/channels/route.ts). Gleicher Persistenz-Mechanismus wie Favoriten/Gesehen
+// (Tabelle "channels").
+export async function listChannels(): Promise<SavedChannel[]> {
+  const { data, error } = await supabase
+    .from("channels")
+    .select("channel_id, title, thumbnail")
+    .order("created_at", { ascending: true });
 
-export function listChannels(): SavedChannel[] {
-  return channelsStore.values();
+  if (error) {
+    console.error("Supabase-Kanal-Lookup fehlgeschlagen:", error.message);
+    return [];
+  }
+  return (data ?? []).map((row) => ({
+    channelId: row.channel_id as string,
+    title: row.title as string,
+    thumbnail: row.thumbnail as string,
+  }));
 }
 
-export function isChannelSaved(channelId: string): boolean {
-  return channelsStore.has(channelId);
+export async function isChannelSaved(channelId: string): Promise<boolean> {
+  const { data, error } = await supabase
+    .from("channels")
+    .select("channel_id")
+    .eq("channel_id", channelId)
+    .maybeSingle();
+
+  if (error) {
+    console.error(`Supabase-Kanal-Lookup fehlgeschlagen (${channelId}):`, error.message);
+    return false;
+  }
+  return data !== null;
 }
 
-export function addChannel(channel: SavedChannel): void {
-  channelsStore.set(channel.channelId, channel);
+export async function addChannel(channel: SavedChannel): Promise<void> {
+  const { error } = await supabase.from("channels").upsert({
+    channel_id: channel.channelId,
+    title: channel.title,
+    thumbnail: channel.thumbnail,
+  });
+
+  if (error) {
+    console.error(`Supabase-Kanal-Schreiben fehlgeschlagen (${channel.channelId}):`, error.message);
+  }
 }
 
-export function removeChannel(channelId: string): void {
-  channelsStore.delete(channelId);
+export async function removeChannel(channelId: string): Promise<void> {
+  const { error } = await supabase.from("channels").delete().eq("channel_id", channelId);
+
+  if (error) {
+    console.error(`Supabase-Kanal-Löschen fehlgeschlagen (${channelId}):`, error.message);
+  }
 }

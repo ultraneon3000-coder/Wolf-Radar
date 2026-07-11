@@ -6,7 +6,7 @@ import type { AnalyzedVideo } from "@/lib/types";
 export const runtime = "nodejs";
 
 export async function GET() {
-  const favorites = listFavorites();
+  const favorites = await listFavorites();
   // Der gespeicherte Snapshot kann ein inzwischen überholtes Urteil enthalten
   // (Override erst nach dem Speichern gesetzt) — deshalb hier frisch überlagern.
   const overrides = await getUrteilOverrides(favorites.map((v) => v.videoId));
@@ -20,7 +20,7 @@ export async function POST(req: NextRequest) {
   if (!body?.video?.videoId) {
     return NextResponse.json({ error: "video (mit videoId) fehlt" }, { status: 400 });
   }
-  addFavorite(body.video);
+  await addFavorite(body.video);
   return NextResponse.json({ ok: true });
 }
 
@@ -29,6 +29,6 @@ export async function DELETE(req: NextRequest) {
   if (!videoId) {
     return NextResponse.json({ error: "videoId fehlt" }, { status: 400 });
   }
-  removeFavorite(videoId);
+  await removeFavorite(videoId);
   return NextResponse.json({ ok: true });
 }

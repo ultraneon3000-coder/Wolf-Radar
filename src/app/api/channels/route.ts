@@ -20,7 +20,7 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: message }, { status: 500 });
     }
   }
-  return NextResponse.json({ channels: listChannels() });
+  return NextResponse.json({ channels: await listChannels() });
 }
 
 export async function POST(req: NextRequest) {
@@ -49,7 +49,7 @@ export async function POST(req: NextRequest) {
   }
 
   const channel: SavedChannel = { channelId, title, thumbnail };
-  addChannel(channel);
+  await addChannel(channel);
   return NextResponse.json({ channel });
 }
 
@@ -58,6 +58,6 @@ export async function DELETE(req: NextRequest) {
   if (!channelId) {
     return NextResponse.json({ error: "channelId fehlt" }, { status: 400 });
   }
-  removeChannel(channelId);
+  await removeChannel(channelId);
   return NextResponse.json({ ok: true });
 }

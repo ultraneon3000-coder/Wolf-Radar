@@ -39,3 +39,40 @@ create table if not exists urteil_override (
 );
 
 alter table urteil_override enable row level security;
+
+-- Von Wolf gespeicherte Kanäle für den "Nur meine Kanäle"-Suchmodus (siehe
+-- src/lib/cache.ts listChannels/addChannel/removeChannel, api/channels/route.ts).
+-- Ersetzt den früheren lokalen JSON-Store (.cache/kanaele.json) — der
+-- überlebte auf Vercel keinen Deploy/Cold-Start bzw. war für andere
+-- Serverless-Instanzen unsichtbar, siehe Diagnose vom Fabian-Kowalik-Bug.
+create table if not exists channels (
+  channel_id text primary key,
+  title text not null,
+  thumbnail text not null default '',
+  created_at timestamptz not null default now()
+);
+
+alter table channels enable row level security;
+
+-- Favoriten: von Wolf angesternte Videos, als vollständiger Snapshot (siehe
+-- src/lib/cache.ts listFavorites/addFavorite/removeFavorite,
+-- api/favorites/route.ts). Ersetzt .cache/favoriten.json — gleicher Grund
+-- wie bei "channels".
+create table if not exists favorites (
+  video_id text primary key,
+  video jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+alter table favorites enable row level security;
+
+-- "Schon gesehen": Videos, die Wolf per Augen-Icon ausgeblendet hat (siehe
+-- src/lib/cache.ts listSeen/addSeen/removeSeen, api/seen/route.ts). Ersetzt
+-- .cache/gesehen.json — gleicher Grund wie bei "channels".
+create table if not exists seen (
+  video_id text primary key,
+  video jsonb not null,
+  created_at timestamptz not null default now()
+);
+
+alter table seen enable row level security;
